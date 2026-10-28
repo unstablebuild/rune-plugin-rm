@@ -1,5 +1,8 @@
 command:
   aliases:
-    # Lists what rm moved to the trash, newest first, in a new terminal tab
-    # that opens in the trash to restore files from.
-    trash: terminalnewtab sh "$RUNE_DATADIR/lib/$RUNE_PKG_ID/libexec/trash"
+    # Lists what rm moved to the trash of the workspace's files, newest
+    # first, in a terminal that opens in the trash to restore files from.
+    # trash-dir runs rm to find the trash, so they agree on where it is.
+    trash:
+      - '!! TRASH_DIR=$(sh "$RUNE_DATADIR/lib/$RUNE_PKG_ID/libexec/trash-dir" "$WORKSPACE_PATH")'
+      - '! sh "$RUNE_DATADIR/lib/$RUNE_PKG_ID/libexec/trash" "$TRASH_DIR"'

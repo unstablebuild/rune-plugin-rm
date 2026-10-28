@@ -1,7 +1,7 @@
 #!/bin/sh
-# Tests bin/rm and libexec/trash. Cases that rm leaves to the rm of the
-# system are checked against it, whichever rm it is, and every case runs
-# under each POSIX shell found here.
+# Tests bin/rm and libexec. Cases that rm leaves to the rm of the system
+# are checked against it, whichever rm it is, and the cases of rm run under
+# each POSIX shell found here.
 set -u
 unset CDPATH
 export LC_ALL=C
@@ -9,8 +9,10 @@ export LC_ALL=C
 repo=$(cd -P -- "$(dirname -- "$0")/.." && pwd) || exit 1
 rm_sh=$repo/bin/rm
 trash_sh=$repo/libexec/trash
+trash_dir_sh=$repo/libexec/trash-dir
 syspath=/usr/bin:/bin
 sysrm=$(PATH=$syspath command -v rm) || exit 1
+uid=$(id -u)
 nl='
 '
 
@@ -303,11 +305,20 @@ else
 	echo "SKIP $name: no script(1)"
 fi
 
+start 'trash-dir prints the trash rm moves the files of the directory to'
+new_env
+run "$syspath" '' sh "$trash_dir_sh" "$T/work"
+expect "exit code ($err)" 0 "$code"
+expect 'trash' "$T/tmp/rune-trash-$uid" "$out"
+run "$syspath" '' sh "$trash_dir_sh"
+expect 'the trash of the current directory' "$T/tmp/rune-trash-$uid" "$out"
+done_case
+
 start 'trash says when it is empty'
 new_env
-run "$syspath" '' env SHELL=/bin/pwd sh "$trash_sh"
+run "$syspath" '' env SHELL=/bin/pwd sh "$trash_sh" "$T/tmp/rune-trash-$uid"
 expect "exit code ($err)" 0 "$code"
-expect 'output' "The trash is empty.$nl$T/work" "$out"
+expect 'output' "The trash is empty: $T/tmp/rune-trash-$uid$nl$T/work" "$out"
 done_case
 
 start 'trash lists what each rm moved, newest first, and opens a shell in the trash'
@@ -315,14 +326,15 @@ new_env
 create d/x d/y/z e/ a
 run_rm - '' -rf d e
 run_rm - '' a
-set -- "$T"/tmp/rune-trash-*/*
+root=$T/tmp/rune-trash-$uid
+set -- "$root"/*
 expect 'directories of the rms' 2 "$#"
 old=$1 new=$2
 for b in "$old" "$new"; do
 	case $(files "$b$T/work" '') in a) new=$b ;; *) old=$b ;; esac
 done
 touch -t 202001010000 "$old"
-run "$syspath" '' env SHELL=/bin/pwd sh "$trash_sh"
+run "$syspath" '' env SHELL=/bin/pwd sh "$trash_sh" "$root"
 expect "exit code ($err)" 0 "$code"
 line() { printf '%s\n' "$out" | sed -n "$1p"; }
 case $(line 1) in "$new  ("*")") ;; *) fail "the newest first: $out" ;; esac
@@ -330,7 +342,7 @@ expect 'what the newest moved' "  $T/work/a" "$(line 2)"
 expect 'the oldest' "$old  (2020-01-01 00:00)" "$(line 3)"
 expect 'what the oldest moved' "  $T/work/d/x$nl  $T/work/d/y/z$nl  $T/work/e/" \
 	"$(printf '%s\n' "$out" | sed -n 4,6p | sort)"
-expect 'shell in the trash' "${new%/*}" "$(printf '%s\n' "$out" | tail -n 1)"
+expect 'shell in the trash' "$root" "$(printf '%s\n' "$out" | tail -n 1)"
 done_case
 
 IFS=$nl

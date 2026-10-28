@@ -18,7 +18,8 @@ Installing this package:
   the `PATH` of its terminals and of the commands it runs, such as Rune Agent's. Other
   programs and terminals keep the `rm` of your system.
 - Adds a `trash` command. Run `:trash` from the command prompt to open a terminal tab
-  that lists what each `rm` moved to the trash, newest first, and opens a shell there.
+  that lists what each `rm` moved to the trash of the workspace's files, newest first,
+  and opens a shell there.
 
 ## How it works
 
@@ -42,6 +43,8 @@ around.
 ## Restore files
 
 Move them back from the trash, as above, or run `:trash` to see what is there.
+`$RUNE_DATADIR/lib/github.com/unstablebuild/rune-plugin-rm/libexec/trash-dir DIR`
+prints the trash of the files in `DIR`.
 
 The system clears the temporary directory on its own schedule, often of days or weeks
 without use, and some systems clear `/tmp` when they start. The schedule counts from

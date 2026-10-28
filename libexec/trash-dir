@@ -1,0 +1,9 @@
+#!/bin/sh
+# trash-dir prints the trash rm moves the files of directory $1, or of the
+# current directory, to, and fails when rm deletes them for good. It runs
+# rm, which holds the logic, so that the two cannot disagree.
+case $0 in
+*/*) here=${0%/*} ;;
+*) here=. ;;
+esac
+exec sh "$here/../bin/rm" --rune-trash-dir "$@"

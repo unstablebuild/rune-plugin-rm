@@ -1,4 +1,4 @@
-SCRIPTS = bin/rm libexec/trash scripts/test.sh
+SCRIPTS = bin/rm libexec/trash libexec/trash-dir scripts/test.sh
 # Linux images with GNU (Debian, whose sh is dash) and busybox (Alpine)
 # tools, each run as root and as a user without a passwd entry.
 DOCKER_IMAGES = debian:stable-slim alpine:latest

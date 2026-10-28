@@ -136,34 +136,51 @@ parent_dev() {
 	[ -n "$pdev" ]
 }
 
-# batch sets b to the directory in the trash on device $1 this rm moves
-# files to, and dest to the one in it for directory $3, which has no $2
-# yet. It fails when no temporary directory is on the device, since a
-# move to another device would copy.
-batch() {
+# usable reports whether $1 can be the trash: a directory of the user's
+# own, which other users can create first in a shared temporary
+# directory, or nothing yet. A shell without -O fails the test, which
+# leaves the files to the rm of the system.
+usable() {
+	if [ -e "$1" ] || [ -L "$1" ]; then
+		# shellcheck disable=SC3067
+		[ -d "$1" ] && ! [ -L "$1" ] && [ -O "$1" ]
+	fi
+}
+
+# root_for sets root to the trash for the files of device $1, or fails
+# when rm deletes those files for good: a move to another device would
+# copy them.
+root_for() {
 	case $1 in '' | *[!0-9]*) return 1 ;; esac
-	eval "b=\${batch_$1-} n=\${count_$1-0}"
-	if [ -z "$b" ]; then
-		tmp=''
+	eval "root=\${root_$1-}"
+	if [ -z "$root" ]; then
+		root=-
 		IFS=$nl
 		for l in $trashes; do
-			if [ "${l%% *}" = "$1" ]; then
-				tmp=${l#* }
-				break
-			fi
+			[ "${l%% *}" = "$1" ] || continue
+			! usable "${l#* }/rune-trash-$user" || root=${l#* }/rune-trash-$user
+			break
 		done
 		unset IFS
-		[ -n "$tmp" ] || return 1
-		root=$tmp/rune-trash-$user
-		[ -d "$root" ] || mkdir -m 700 -- "$root" 2>/dev/null
-		# Other users can create it first in a shared /tmp. A shell without
-		# -O fails the test, which leaves the files to the real rm.
-		# shellcheck disable=SC3067
-		[ -d "$root" ] && ! [ -L "$root" ] && [ -O "$root" ] || return 1
-	else
-		root=${b%/*}
+		eval "root_$1=\$root"
 	fi
-	# A directory of an earlier rm of the same process ID is skipped.
+	[ "$root" != - ]
+}
+
+# batch sets b to the directory in the trash for the files of device $1
+# that this rm moves files to, and dest to the one in it for directory $3,
+# which has no $2 yet. It is named after the process ID of rm, skipping
+# one of an earlier rm of the same.
+batch() {
+	root_for "$1" || return 1
+	eval "b=\${batch_$1-} n=\${count_$1-0}"
+	if [ -z "$b" ]; then
+		[ -d "$root" ] || mkdir -m 700 -- "$root" 2>/dev/null
+		if ! [ -d "$root" ] || ! usable "$root"; then
+			eval "root_$1=-"
+			return 1
+		fi
+	fi
 	while [ -z "$b" ] || [ -e "$b$3/$2" ] || [ -L "$b$3/$2" ]; do
 		n=$((n + 1))
 		[ "$n" -le 1000 ] || return 1
@@ -232,6 +249,22 @@ consider() {
 	quote "$1"
 	group="$group $q" gcount=$((gcount + 1))
 }
+
+# rm --rune-trash-dir [DIR] prints the trash rm moves the files of DIR, or
+# of the current directory, to, or fails when it deletes them for good.
+if [ "${1-}" = --rune-trash-dir ]; then
+	if ! cd -P -- "${2:-.}" 2>/dev/null; then
+		printf 'rm: cannot open %s\n' "${2:-.}" >&2
+		exit 1
+	fi
+	home=$PWD parent=$PWD
+	if parent_dev && root_for "$pdev"; then
+		printf '%s\n' "$root"
+		exit 0
+	fi
+	printf 'rm: no trash is on the disk of %s, so rm deletes its files for good\n' "$PWD" >&2
+	exit 1
+fi
 
 [ -z "${RUNE_TRASH_RM_PASSED-}" ] || pass "$@"
 

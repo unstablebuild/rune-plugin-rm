@@ -1,58 +1,37 @@
 #!/bin/sh
-# trash lists what rm moved to the trash, newest first, then opens a shell
-# in the trash to restore files from. The trash command that the package
-# adds to Rune runs it in a terminal.
+# trash lists what rm moved to trash $1, as libexec/trash-dir prints it,
+# newest first, then opens a shell there to restore files from.
 
 set -f
 unset CDPATH
 
 nl='
 '
-user=${USER:-${LOGNAME-}}
-case $user in '' | */*) user=$(id -u) || exit 1 ;; esac
 
-# rm uses the temporary directory on the same disk as the file, so each of
-# them can have a trash.
-roots=''
-for t in "${TMPDIR-}" /var/tmp /tmp; do
-	if [ -z "$t" ] || ! cd -P -- "$t/rune-trash-$user" 2>/dev/null; then
-		continue
-	fi
-	case $nl$roots$nl in *"$nl$PWD$nl"*) ;; *) roots=$roots${roots:+$nl}$PWD ;; esac
-done
-
-set --
-IFS=$nl
-for r in $roots; do
-	set +f
-	for b in "$r"/*; do
-		if [ -d "$b" ] && ! [ -L "$b" ]; then
-			set -- "$@" "$b"
-		fi
-	done
-	set -f
-done
-unset IFS
-
-if [ "$#" -eq 0 ]; then
-	echo 'The trash is empty.'
+if [ -z "${1-}" ]; then
+	echo 'usage: trash DIR' >&2
+	exit 2
+fi
+if ! cd -P -- "$1" 2>/dev/null; then
+	printf 'The trash is empty: %s\n' "$1"
 	exec "${SHELL:-/bin/sh}"
 fi
 
-# Each directory holds what one rm moved, at its full path. ls sorts them
-# by time, and they are split by line, which their paths do not span.
+# Each directory holds what one rm moved, at its full path. rm names them,
+# with no newline. ls sorts them by time.
 newest=''
 IFS=$nl
 # shellcheck disable=SC2045
-for b in $(ls -dt -- "$@"); do
-	[ -n "$newest" ] || newest=$b
-	when=$(date -r "$b" '+%Y-%m-%d %H:%M' 2>/dev/null) || when=''
-	printf '%s%s\n' "$b" "${when:+  ($when)}"
-	(
-		cd -P -- "$b" || exit
-		find . ! -name . \( -type d -empty -exec printf '%s/\n' {} \; -o ! -type d -print \) |
-			head -n 6
-	) | {
+for b in $(ls -t); do
+	if ! [ -d "$b" ] || [ -L "$b" ]; then
+		continue
+	fi
+	[ -n "$newest" ] || newest=$PWD/$b
+	# BSD date takes a name that is a number for seconds.
+	when=$(date -r "$PWD/$b" '+%Y-%m-%d %H:%M' 2>/dev/null) || when=''
+	printf '%s%s\n' "$PWD/$b" "${when:+  ($when)}"
+	find "$b" ! -path "$b" \( -type d -empty -exec printf '%s/\n' {} \; -o ! -type d -print \) |
+		head -n 6 | {
 		n=0
 		while IFS= read -r f; do
 			n=$((n + 1))
@@ -60,11 +39,16 @@ for b in $(ls -dt -- "$@"); do
 				echo '  …'
 				break
 			fi
-			printf '  %s\n' "${f#.}"
+			printf '  %s\n' "${f#"$b"}"
 		done
 	}
 done
 unset IFS
+
+if [ -z "$newest" ]; then
+	printf 'The trash is empty: %s\n' "$PWD"
+	exec "${SHELL:-/bin/sh}"
+fi
 
 cat <<EOF
 
@@ -73,5 +57,4 @@ To restore a file, move it back to where it was, as in:
   mv $newest/path/to/file /path/to/file
 
 EOF
-cd -- "${newest%/*}" || exit 1
 exec "${SHELL:-/bin/sh}"
