@@ -19,7 +19,7 @@ sq="'"
 keep_for=604800
 status=0 real='' statfmt='' tried='' trashes='' pdev='' parent='' home='' now=''
 force='' recursive='' dir='' verbose=''
-lastd='' group='' gcount=0 gdest='' gbatch='' moved=''
+lastd='' group='' gcount=0 gnames='' gdest='' gbatch='' moved=''
 
 # is_rm reports whether $1 is an rm that removes for good, not a version
 # of this one, which would run this again.
@@ -290,7 +290,7 @@ batch() {
 flush() {
 	[ "$gcount" -gt 0 ] || return 0
 	eval "set -- $group"
-	group='' gcount=0
+	group='' gcount=0 gnames=''
 	mkdir -p -- "$gdest" && mv -- "$@" "$gdest/" 2>/dev/null
 	for f do
 		if [ -e "$f" ] || [ -L "$f" ]; then
@@ -306,6 +306,8 @@ flush() {
 # to move to the trash, or leaves it to the rm of the system. The files
 # are moved some at a time: the shell copies all of them to gather one.
 consider() {
+	# A file named twice is gone when rm comes to it again, as rm finds it.
+	case $nl$gnames in *"$nl${1##*/}$nl"*) flush ;; esac
 	if ! [ -e "$1" ] && ! [ -L "$1" ]; then
 		[ -n "$force" ] || leave "$2"
 		return
@@ -345,7 +347,7 @@ consider() {
 		gdest=$dest gbatch=$b
 	fi
 	quote "$1"
-	group="$group $q" gcount=$((gcount + 1))
+	group="$group $q" gcount=$((gcount + 1)) gnames=$gnames$base$nl
 }
 
 # keep moves what directory $1, which rm was given as $2, holds to the

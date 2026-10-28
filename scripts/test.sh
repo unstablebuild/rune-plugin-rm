@@ -210,6 +210,8 @@ check a '-v a' verbose trash='1 a' "stdout=moved 'a' to '"
 check 'd/x d/y' '-r d/x d' 'a name already in the directory of the rm' trash='1 d/x|2 d/y'
 check '' '-f nope' 'a missing file with -f'
 check a 'nope a' 'a missing file' code=1 trash='1 a' stderr
+check 'a b' 'a b ./a' 'a file named twice' trash='1 a|1 b' likerm
+check 'a b' '-f a b a' 'a file named twice with -f' trash='1 a|1 b' likerm
 check d/x d 'a directory without -r' likerm
 check e/ '-d e' 'an empty directory with -d' likerm
 check a '-i a' 'options it does not handle' stdin=y likerm
