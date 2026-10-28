@@ -321,7 +321,22 @@ consider() {
 	fi
 	base=${1##*/}
 	path=${parent%/}/$base
-	if ! parent_dev || in_trash "$path" || ! batch "$pdev" "$base" "${parent%/}"; then
+	if ! parent_dev || in_trash "$path" || ! root_for "$pdev"; then
+		leave "$2"
+		return
+	fi
+	case $root/ in
+	"$path"/*)
+		# Removing the temporary directory or the cache removes the trash.
+		if [ "$path" = "$rbase" ]; then
+			leave "$2"
+		else
+			keep "$path" "$2"
+		fi
+		return
+		;;
+	esac
+	if ! batch "$pdev" "$base" "${parent%/}"; then
 		leave "$2"
 		return
 	fi
@@ -331,6 +346,30 @@ consider() {
 	fi
 	quote "$1"
 	group="$group $q" gcount=$((gcount + 1))
+}
+
+# keep moves what directory $1, which rm was given as $2, holds to the
+# trash, which is in it, but for the directories on the way to the trash.
+keep() {
+	flush
+	kroot=$root kept=$1
+	while [ "$kept" != "$kroot" ]; do
+		next=${kroot#"${kept%/}"/}
+		next=${next%%/*}
+		parent=$kept pdev=''
+		set +f
+		for e in "$kept"/* "$kept"/.[!.]* "$kept"/..?*; do
+			set -f
+			if [ "${e##*/}" != "$next" ] && { [ -e "$e" ] || [ -L "$e" ]; }; then
+				consider "$e" "$e"
+			fi
+		done
+		set -f
+		flush
+		kept=${kept%/}/$next
+	done
+	printf "rm: cannot remove '%s': it holds the trash, %s\n" "$2" "$kroot" >&2
+	status=1 lastd=''
 }
 
 # rm --rune-trash-dir [DIR] prints the trash rm moves the files of DIR, or

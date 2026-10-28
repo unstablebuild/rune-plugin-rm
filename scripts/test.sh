@@ -447,6 +447,21 @@ else
 	expect 'in the trash' '1 a' "$(ctrash "$T/cache")"
 	done_case
 
+	start 'removing the home keeps the trash, and moves the rest to it'
+	new_home
+	mkdir -p "$T/home/src/app" "$T/home/.cache/pip"
+	: >"$T/home/.profile"
+	: >"$T/home/src/app/main.go"
+	: >"$T/home/.cache/pip/x"
+	run_rm - '' -rf "$T/home"
+	expect 'exit code' 1 "$code"
+	expect 'message' "rm: cannot remove '$T/home': it holds the trash, $T/home/.cache/rune-trash" "$err"
+	expect 'left in the home' .cache "$(ls -A "$T/home")"
+	expect 'left in the cache' rune-trash "$(ls -A "$T/home/.cache")"
+	expect 'in the trash' "1 .cache/pip/x${nl}1 .profile${nl}1 src/app/main.go" \
+		"$(ctrash '' "$T/home")"
+	done_case
+
 	start 'removing the cache removes the trash'
 	new_home
 	create a

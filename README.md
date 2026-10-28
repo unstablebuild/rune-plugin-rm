@@ -73,8 +73,11 @@ that trash.
   created it first in a shared `/tmp`, and `rune-trash-<uid>` is not yours either;
 - what would go to the cache of a home that is not yours, as when root runs `rm` under
   `sudo` with the home of the user;
-- a directory that holds the trash, such as the temporary directory, the cache or your
-  home, with the trash.
+- the temporary directory or the cache that holds the trash, with the trash.
+
+Removing a directory that holds the trash further down, such as your home, moves what
+it holds to the trash, except the directories on the way to the trash, and fails as `rm`
+fails on a directory it cannot remove.
 
 It leaves to the `rm` of the system, which deletes as usual:
 
