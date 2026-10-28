@@ -1,6 +1,7 @@
 SCRIPTS = bin/rm libexec/trash libexec/trash-dir scripts/test.sh
 # Linux images with GNU (Debian, whose sh is dash) and busybox (Alpine)
-# tools, each run as root and as a user without a passwd entry.
+# tools, each run as root and as a user without a passwd entry. Their
+# /dev/shm is another disk than their temporary directories.
 DOCKER_IMAGES = debian:stable-slim alpine:latest
 DOCKER_USERS = 0:0 1000:1000
 

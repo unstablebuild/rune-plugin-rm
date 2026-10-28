@@ -2,7 +2,7 @@
 
 A package for [Rune](https://github.com/unstablebuild/rune) that shadows your system's
 `rm` with one that moves what you or your agent intended to remove, to a trash in the
-temporary directory instead of deleting it.
+temporary directory or your home's cache instead of deleting it.
 
 ```bash
 $ rm -rf build
@@ -23,15 +23,21 @@ Installing this package:
 
 ## How it works
 
-`rm` moves each file to `rune-trash-<user>` in the first of `$TMPDIR`, `/var/tmp` and
-`/tmp` that is on the same disk as the file, so that the move is a rename, which is as
-quick as deleting the file whatever its size. Each `rm` gets a directory there named
-after when it ran and its process ID, which holds the files at their full paths:
-removing `/home/me/src/app/build` puts it at
+`rm` moves each file to a trash on the same disk as the file, so that the move is a
+rename, which is as quick as deleting the file whatever its size. The trash is the
+first of these that is on the file's disk:
+
+1. `rune-trash-<user>` in `$TMPDIR`, `/var/tmp` or `/tmp`;
+2. `rune-trash` in the cache of your home, `$XDG_CACHE_HOME` or `~/.cache`.
+
+Each `rm` gets a directory in the trash named after when it ran and its process ID,
+which holds the files at their full paths: removing `/home/me/src/app/build` puts it at
 `/var/tmp/rune-trash-me/1761660000-4242/home/me/src/app/build`.
 
 On macOS, `$TMPDIR` is a directory of your own on the disk of your home. On Linux,
-`/tmp` is often in memory, so files of your home go to `/var/tmp`.
+`/tmp` is often in memory, so files of your home go to `/var/tmp`, or to the cache of
+your home when it is on a disk of its own, as on many btrfs and network setups. Files
+on other disks, such as a USB drive or `/dev/shm`, have no trash: `rm` deletes them.
 
 When its standard error is a terminal, `rm` tells you which directory it moved the files
 to. Otherwise it prints nothing, as `rm` does, so scripts and agents that read its output
@@ -50,7 +56,8 @@ The system clears the temporary directory on its own schedule, often of days or 
 without use, and some systems clear `/tmp` when they start. The schedule counts from
 when the files were last used, not from when they were removed, so a file you had not
 opened in a while can go soon after. `rm` itself deletes what it moved to the trash a
-week before or more. Restore files as soon as you can.
+week before or more, and is all that clears the cache of your home. Restore files as
+soon as you can.
 
 Until then, the files still take up space on the disk. To free it, remove them from the
 trash: `rm` deletes what is already in it, so `rm -rf /var/tmp/rune-trash-me` empties
@@ -60,10 +67,14 @@ that trash.
 
 `rm` deletes for good, through the `rm` of the system:
 
-- what is on a disk where none of the temporary directories is, or is already in the
-  trash, or could not be moved;
+- what is on a disk where neither a temporary directory nor the cache of your home is,
+  or is already in the trash, or could not be moved;
 - what would go to a trash that is not a directory of yours, as when another user
-  created it first in a shared `/tmp`, and `rune-trash-<uid>` is not yours either.
+  created it first in a shared `/tmp`, and `rune-trash-<uid>` is not yours either;
+- what would go to the cache of a home that is not yours, as when root runs `rm` under
+  `sudo` with the home of the user;
+- a directory that holds the trash, such as the temporary directory, the cache or your
+  home, with the trash.
 
 It leaves to the `rm` of the system, which deletes as usual:
 

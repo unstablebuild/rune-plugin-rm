@@ -1,7 +1,8 @@
 #!/bin/sh
 # Tests bin/rm and libexec. Cases that rm leaves to the rm of the system
 # are checked against it, whichever rm it is, and the cases of rm run under
-# each POSIX shell found here.
+# each POSIX shell found here. Those of a home on another disk than the
+# temporary directories run where /dev/shm is one, as in containers.
 set -u
 unset CDPATH
 export LC_ALL=C
@@ -49,10 +50,11 @@ done_case() {
 	[ "$failed" -ne "$before" ] || passed=$((passed + 1))
 }
 
-# new_env sets T to a new directory with work/, which rm runs in, and
-# tmp/, which holds the trash, by the physical paths the trash records.
+# new_env sets T to a new directory in $1, or the temporary directory,
+# with work/, which rm runs in, and tmp/, which holds the trash, by the
+# physical paths the trash records.
 new_env() {
-	T=$(mktemp -d "${TMPDIR:-/tmp}/rm-test.XXXXXX") && T=$(cd -P -- "$T" && pwd) &&
+	T=$(mktemp -d "${1:-${TMPDIR:-/tmp}}/rm-test.XXXXXX") && T=$(cd -P -- "$T" && pwd) &&
 		mkdir "$T/work" "$T/tmp" || exit 1
 	envs=$envs$nl$T
 }
@@ -81,14 +83,14 @@ files() {
 	) | sed "s|^\./|$2|" | sort
 }
 
-# trashed lists the files of work in the trash of the uid, prefixed by the
-# number of the directory of the rm they are in.
+# trashed lists the files of $2, or work, in trash $1, or the one in tmp,
+# prefixed by the number of the directory of the rm they are in.
 trashed() {
 	i=0
-	for b in "$T/tmp/rune-trash-$uid"/*; do
+	for b in "${1:-$T/tmp/rune-trash-$uid}"/*; do
 		[ -d "$b" ] || continue
 		i=$((i + 1))
-		files "$b$T/work" "$i "
+		files "$b${2:-$T/work}" "$i "
 	done
 }
 
@@ -384,6 +386,10 @@ expect 'the newest first' "$root/12-1  (2020-01-01 00:12)" "$(printf '%s\n' "$ou
 expect 'the rest' '…and what 2 more rms moved' "$(printf '%s\n' "$out" | grep 'more rms')"
 done_case
 
+dev_of() {
+	stat -c %d -- "$1" 2>/dev/null || stat -f %d -- "$1" 2>/dev/null
+}
+
 # Root can test what it is to be another user.
 if [ "$uid" -eq 0 ]; then
 	start 'a trash another user made first, as USER may name them'
@@ -397,6 +403,85 @@ if [ "$uid" -eq 0 ]; then
 	expect 'in the trash of the uid' '1 a' "$(trashed)"
 	expect "in the other user's" '' "$(ls "$T/tmp/rune-trash-someone")"
 	done_case
+fi
+
+shm=''
+if [ -d /dev/shm ] && [ -w /dev/shm ]; then
+	shm=$(dev_of /dev/shm)
+	for t in "${TMPDIR:-/tmp}" /var/tmp /tmp; do
+		[ "$(dev_of "$t")" != "$shm" ] || shm=''
+	done
+fi
+if [ -z "$shm" ]; then
+	echo 'SKIP a home on another disk than the temporary directories: no /dev/shm on one'
+else
+	host_tmp=$(mktemp -d "${TMPDIR:-/tmp}/rm-test.XXXXXX") && envs=$envs$nl$host_tmp
+	# new_home sets T to an environment on /dev/shm, with home/ as the home.
+	new_home() {
+		new_env /dev/shm
+		mkdir "$T/home"
+		xenv="HOME=$T/home TMPDIR=$host_tmp"
+	}
+	ctrash() {
+		trashed "${1:-$T/home/.cache}/rune-trash" "${2:-$T/work}"
+	}
+
+	start 'the files of a disk without a temporary directory go to the cache of the home'
+	new_home
+	create a d/x
+	run_rm - '' -r a d
+	expect "exit code ($err)" 0 "$code"
+	expect 'in the trash' "1 a${nl}1 d/x" "$(ctrash)"
+	expect 'in the temporary directory' '' "$(ls "$host_tmp")"
+	run "$syspath" '' sh "$trash_dir_sh" "$T/work"
+	expect 'trash-dir' "$T/home/.cache/rune-trash" "$out"
+	done_case
+
+	start 'XDG_CACHE_HOME holds the trash'
+	new_home
+	mkdir "$T/cache"
+	xenv="$xenv XDG_CACHE_HOME=$T/cache"
+	create a
+	run_rm - '' a
+	expect "exit code ($err)" 0 "$code"
+	expect 'in the trash' '1 a' "$(ctrash "$T/cache")"
+	done_case
+
+	start 'removing the cache removes the trash'
+	new_home
+	create a
+	run_rm - '' a
+	run_rm - '' -rf "$T/home/.cache"
+	expect "exit code ($err)" 0 "$code"
+	expect 'left in the home' '' "$(ls -A "$T/home")"
+	done_case
+
+	start 'a disk with no trash'
+	new_env /dev/shm
+	create a
+	xenv="TMPDIR=$host_tmp"
+	run_rm - '' a
+	expect "exit code ($err)" 0 "$code"
+	expect 'left' '' "$(files "$T/work" '')"
+	run "$syspath" '' sh "$trash_dir_sh" "$T/work"
+	expect 'trash-dir fails' 1 "$code"
+	expect 'trash-dir says why' \
+		"rm: no trash is on the disk of $T/work, so rm deletes its files for good" "$err"
+	xenv=''
+	done_case
+
+	if [ "$uid" -eq 0 ]; then
+		start "root with another user's home deletes for good"
+		new_home
+		chown 1000 "$T/home"
+		create a
+		run_rm - '' a
+		expect "exit code ($err)" 0 "$code"
+		expect 'left' '' "$(files "$T/work" '')"
+		expect 'left in the home' '' "$(ls -A "$T/home")"
+		done_case
+	fi
+	xenv=''
 fi
 
 IFS=$nl

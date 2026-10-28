@@ -1,8 +1,7 @@
 #!/bin/sh
 # shellcheck disable=SC2119 # flush gathers its arguments itself.
-# This rm moves what it removes to a trash in the temporary directory,
-# which the system clears in time, so that what an agent, a script or a
-# slip removes can be restored. What it cannot do the way rm would, it
+# This rm moves what it removes to a trash, so that what an agent, a script
+# or a slip removes can be restored. What it cannot do the way rm would, it
 # leaves to the rm of the system. See
 # https://github.com/unstablebuild/rune-plugin-rm.
 
@@ -87,43 +86,73 @@ quote() {
 	done
 }
 
-# devices sets out to a "device path" line per file, or fails.
+# devices sets out to the device of each file, a line each, or fails.
 devices() {
 	if [ -z "$statfmt" ]; then
-		# Guess right on macOS and Linux to start one stat rather than two.
+		# Guess right on macOS to start one stat rather than two.
 		if [ -d /System/Library ]; then statfmt=bsd; else statfmt=gnu; fi
 		devices "$@" && return 0
 		if [ "$statfmt" = gnu ]; then statfmt=bsd; else statfmt=gnu; fi
 	fi
 	if [ "$statfmt" = gnu ]; then
-		out=$(stat -c '%d %n' -- "$@" 2>/dev/null)
+		out=$(stat -c %d -- "$@" 2>/dev/null)
 	else
-		out=$(stat -f '%d %N' -- "$@" 2>/dev/null)
+		out=$(stat -f %d -- "$@" 2>/dev/null)
 	fi
 }
 
-# init_trash sets trashes to the temporary directories the trash can be
-# in, as "device path" lines, and pdev to the device of directory $1.
+# candidate adds directory $2, whose device is that of $3, to those the
+# trash $1 can be in.
+candidate() {
+	case $2$3 in *"$nl"*) return 0 ;; esac
+	cands="$cands$1 $2$nl" stats="$stats$3$nl"
+}
+
+# init_trash sets trashes to the directories the trash can be in, as
+# "device name directory" lines in the order rm prefers them, and pdev to
+# the device of directory $1. The trash is in a temporary directory, which
+# the system clears in time, or else in the cache of the home, from which
+# rm deletes what it moved there a week before.
 init_trash() {
 	tried=1
 	[ -n "$home" ] || return 1
 	user=${USER:-${LOGNAME-}}
 	case $user in '' | *[!A-Za-z0-9._-]*) user=$(id -u) || return 1 ;; esac
-	tmps=''
+	cands='' stats=''
 	for t in "${TMPDIR-}" /var/tmp /tmp; do
-		[ -n "$t" ] && cd -P -- "$t" 2>/dev/null && tmps=$tmps${tmps:+$nl}$PWD
+		if [ -n "$t" ] && cd -P -- "$t" 2>/dev/null; then
+			candidate "rune-trash-$user" "$PWD" "$PWD"
+		fi
 	done
+	# A user with another's home, such as root under sudo, has no trash there.
+	# shellcheck disable=SC3067
+	if [ -n "${HOME-}" ] && cd -P -- "$HOME" 2>/dev/null && [ -O . ]; then
+		h=$PWD
+		c=$h/.cache
+		case ${XDG_CACHE_HOME-} in /*) [ -d "$XDG_CACHE_HOME" ] && c=$XDG_CACHE_HOME ;; esac
+		if cd -P -- "$c" 2>/dev/null; then
+			# shellcheck disable=SC3067
+			! [ -O . ] || candidate rune-trash "$PWD" "$PWD"
+		else
+			# rm creates it.
+			candidate rune-trash "$h/.cache" "$h"
+		fi
+	fi
 	back
-	[ -n "$tmps" ] || return 1
 	IFS=$nl
-	# Split into the directories; globbing is off.
 	# shellcheck disable=SC2086
-	devices $tmps "$1" || out=''
+	if ! devices $stats "$1"; then
+		unset IFS
+		return 1
+	fi
+	# shellcheck disable=SC2086
+	set -- $out
+	for l in $cands; do
+		trashes="$trashes$1 $l$nl"
+		shift
+	done
 	unset IFS
-	case $out in *"$nl"*) ;; *) return 1 ;; esac
-	trashes=${out%"$nl"*}
-	pdev=${out##*"$nl"}
-	pdev=${pdev%% *}
+	pdev=$1
 }
 
 # parent_dev sets pdev to the device of directory parent, or fails.
@@ -133,7 +162,7 @@ parent_dev() {
 	if [ -z "$tried" ]; then
 		init_trash "$parent" || return 1
 	elif [ -n "$trashes" ] && devices "$parent"; then
-		pdev=${out%% *}
+		pdev=$out
 	fi
 	[ -n "$pdev" ]
 }
@@ -149,32 +178,49 @@ usable() {
 	fi
 }
 
-# root_for sets root to the trash for the files of device $1, or fails
-# when rm deletes those files for good: a move to another device would
-# copy them.
+# root_for sets root to the trash for the files of device $1 and rbase to
+# the directory it is in, or fails when rm deletes those files for good:
+# a move to another device would copy them.
 root_for() {
 	case $1 in '' | *[!0-9]*) return 1 ;; esac
-	eval "root=\${root_$1-}"
+	eval "root=\${root_$1-} rbase=\${rbase_$1-}"
 	if [ -z "$root" ]; then
-		root=-
+		root=- rbase=''
 		IFS=$nl
 		for l in $trashes; do
 			[ "${l%% *}" = "$1" ] || continue
-			tmp=${l#* }
-			name=rune-trash-$user
-			if usable "$tmp/$name"; then
-				root=$tmp/$name
-			elif [ "$name" != "rune-trash-$(id -u)" ]; then
+			l=${l#* }
+			rbase=${l#* }
+			name=${l%% *}
+			if usable "$rbase/$name"; then
+				root=$rbase/$name
+			elif [ "$name" != rune-trash ] && [ "$name" != "rune-trash-$(id -u)" ]; then
 				# The user may not be the one USER names.
 				name=rune-trash-$(id -u)
-				! usable "$tmp/$name" || root=$tmp/$name
+				! usable "$rbase/$name" || root=$rbase/$name
 			fi
 			break
 		done
 		unset IFS
-		eval "root_$1=\$root"
+		eval "root_$1=\$root rbase_$1=\$rbase"
 	fi
 	[ "$root" != - ]
+}
+
+# in_trash reports whether $1 is in a trash, whose files rm deletes.
+in_trash() {
+	IFS=$nl
+	for l in $trashes; do
+		l=${l#* }
+		l=${l#* }
+		case $1/ in "$l"/rune-trash/* | "$l"/rune-trash-*/*)
+			unset IFS
+			return 0
+			;;
+		esac
+	done
+	unset IFS
+	return 1
 }
 
 # prune deletes, in the background, what rm moved to trash root a week ago
@@ -214,7 +260,10 @@ batch() {
 	root_for "$1" || return 1
 	eval "b=\${batch_$1-} n=\${count_$1-0}"
 	if [ -z "$b" ]; then
-		[ -d "$root" ] || mkdir -m 700 -- "$root" 2>/dev/null
+		if ! [ -d "$root" ]; then
+			mkdir -p -- "$rbase" 2>/dev/null
+			mkdir -m 700 -- "$root" 2>/dev/null
+		fi
 		if ! [ -d "$root" ] || ! usable "$root"; then
 			eval "root_$1=-"
 			return 1
@@ -234,21 +283,6 @@ batch() {
 	done
 	eval "batch_$1=\$b count_$1=\$n"
 	dest=$b$3
-}
-
-# in_trash reports whether $1 is in a trash, whose files rm deletes.
-in_trash() {
-	IFS=$nl
-	for l in $trashes; do
-		l=${l#* }
-		case $1/ in "$l"/rune-trash-*/*)
-			unset IFS
-			return 0
-			;;
-		esac
-	done
-	unset IFS
-	return 1
 }
 
 # flush moves the files gathered, all in one directory, to gdest.
