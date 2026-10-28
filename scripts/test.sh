@@ -199,6 +199,7 @@ check 'a l->a' l 'a symlink, not what it names' left=a trash='1 l'
 check d/x '-r d/' 'a trailing slash' trash='1 d/x'
 check 'a s/' s/../a 'a path through ..' left=s/ trash='1 a'
 check -x '-- -x' 'a name like an option after --' trash='1 -x'
+check "it's" "it's" 'a name with a quote' trash="1 it's"
 check a '-v a' verbose trash='1 a' "stdout=moved 'a' to '"
 check 'd/x d/y' '-r d/x d' 'a name already in the directory of the rm' trash='1 d/x|2 d/y'
 check '' '-f nope' 'a missing file with -f'
@@ -210,6 +211,23 @@ check a 'a -f' 'options after files' likerm
 check a '-rf .' 'rm refuses .' likerm
 check '' -f 'no files with -f' likerm
 check '' '' 'no files' likerm
+
+start 'many files, which rm moves some at a time'
+new_env
+mkdir "$T/work/d"
+i=0
+while [ "$i" -lt 3000 ]; do
+	: >"$T/work/d/f$i"
+	i=$((i + 1))
+done
+t0=$(date +%s)
+run_rm - '' -f "$T"/work/d/*
+t1=$(date +%s)
+expect "exit code ($err)" 0 "$code"
+expect 'left' '' "$(ls "$T/work/d")"
+expect 'in the trash' 3000 "$(trashed | wc -l | tr -d ' ')"
+echo "INFO $name: $((t1 - t0))s"
+done_case
 
 start 'rm deletes what is in the trash'
 new_env

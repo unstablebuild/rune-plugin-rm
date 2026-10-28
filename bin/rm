@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2119 # flush gathers its arguments itself.
 # This rm moves what it removes to a trash in the temporary directory,
 # which the system clears in time, so that what an agent, a script or a
 # slip removes can be restored. What it cannot do the way rm would, it
@@ -12,7 +13,12 @@ unset CDPATH
 # Every version of this rm holds this text, in its first comment, which
 # tells them from the rm of the system.
 marker='This rm moves what it removes to a trash'
-real=''
+nl='
+'
+sq="'"
+status=0 real='' statfmt='' tried='' trashes='' pdev='' parent='' home=''
+force='' recursive='' dir='' verbose=''
+lastd='' group='' gcount=0 gdest='' gbatch='' moved=''
 
 # is_rm reports whether $1 is an rm that removes for good, not a version
 # of this one, which would run this again.
@@ -52,62 +58,12 @@ pass() {
 	exec "$real" "$@"
 }
 
-[ -z "${RUNE_TRASH_RM_PASSED-}" ] || pass "$@"
-
-force='' recursive='' dir='' verbose=''
-opts=1 dashdash='' count=0
-for a do
-	if [ -n "$opts" ]; then
-		case $a in
-		--) opts='' dashdash=1; continue ;;
-		--force) force=1; continue ;;
-		--recursive) recursive=1; continue ;;
-		--dir) dir=1; continue ;;
-		--verbose) verbose=1; continue ;;
-		-*[!dfRrv]*) pass "$@" ;;
-		-?*)
-			case $a in *f*) force=1 ;; esac
-			case $a in *[Rr]*) recursive=1 ;; esac
-			case $a in *d*) dir=1 ;; esac
-			case $a in *v*) verbose=1 ;; esac
-			continue
-			;;
-		esac
-		opts=
-	elif [ -z "$dashdash" ]; then
-		# GNU rm takes options after files; other rms take them as files.
-		case $a in -?*) pass "$@" ;; esac
-	fi
-	p=$a
-	while :; do case $p in ?*/) p=${p%/} ;; *) break ;; esac; done
-	# rm refuses these, each in its own words.
-	case $p in '' | / | . | .. | */. | */..) pass "$@" ;; esac
-	count=$((count + 1))
-done
-[ "$count" -gt 0 ] || pass "$@"
-
-opts=1
-for a do
-	shift
-	if [ -n "$opts" ]; then
-		case $a in
-		--) opts=; continue ;;
-		-?*) continue ;;
-		esac
-		opts=
-	fi
-	set -- "$@" "$a"
-done
-
-nl='
-'
-status=0 moved='' statfmt='' trashes='' tried=''
-
-# Each process this starts can cost as much as rm itself, so it changes
-# directory to resolve paths rather than run a subshell, and comes back
-# to home.
-home=''
-cd -P . 2>/dev/null && cd -P -- "$PWD" 2>/dev/null && home=$PWD
+# leave has the rm of the system remove $1.
+leave() {
+	real_rm
+	RUNE_TRASH_RM_PASSED=1 "$real" ${force:+-f} ${recursive:+-R} ${dir:+-d} ${verbose:+-v} -- "$1" ||
+		status=1
+}
 
 back() {
 	cd -P -- "$home" 2>/dev/null && return 0
@@ -115,11 +71,18 @@ back() {
 	exit 1
 }
 
-# leave has the rm of the system remove $1.
-leave() {
-	real_rm
-	RUNE_TRASH_RM_PASSED=1 "$real" ${force:+-f} ${recursive:+-R} ${dir:+-d} ${verbose:+-v} -- "$1" ||
-		status=1
+# quote sets q to $1 quoted for eval.
+quote() {
+	q='' s=$1
+	while :; do
+		case $s in
+		*"$sq"*) q=$q${s%%"$sq"*}$sq\\$sq$sq s=${s#*"$sq"} ;;
+		*)
+			q=$sq$q$s$sq
+			return
+			;;
+		esac
+	done
 }
 
 # devices sets out to a "device path" line per file, or fails.
@@ -159,6 +122,18 @@ init_trash() {
 	trashes=${out%"$nl"*}
 	pdev=${out##*"$nl"}
 	pdev=${pdev%% *}
+}
+
+# parent_dev sets pdev to the device of directory parent, or fails.
+parent_dev() {
+	[ -z "$pdev" ] || return 0
+	[ -n "$parent" ] || return 1
+	if [ -z "$tried" ]; then
+		init_trash "$parent" || return 1
+	elif [ -n "$trashes" ] && devices "$parent"; then
+		pdev=${out%% *}
+	fi
+	[ -n "$pdev" ]
 }
 
 # batch sets b to the directory in the trash on device $1 this rm moves
@@ -210,9 +185,12 @@ in_trash() {
 	return 1
 }
 
-# flush moves the files, all in one directory, to gdest.
+# flush moves the files gathered, all in one directory, to gdest.
+# shellcheck disable=SC2120
 flush() {
-	[ "$#" -gt 0 ] || return 0
+	[ "$gcount" -gt 0 ] || return 0
+	eval "set -- $group"
+	group='' gcount=0
 	mkdir -p -- "$gdest" && mv -- "$@" "$gdest/" 2>/dev/null
 	for f do
 		if [ -e "$f" ] || [ -L "$f" ]; then
@@ -224,10 +202,81 @@ flush() {
 	done
 }
 
-# The files to move to gdest together are gathered in "$@", which the
-# loop no longer reads once it starts.
-lastd='' gdest='' gbatch='' first=1
+# consider gathers file $1 of directory parent, which rm was given as $2,
+# to move to the trash, or leaves it to the rm of the system. The files
+# are moved some at a time: the shell copies all of them to gather one.
+consider() {
+	if ! [ -e "$1" ] && ! [ -L "$1" ]; then
+		[ -n "$force" ] || leave "$2"
+		return
+	fi
+	# Whether rm removes the link or what it names depends on the rm.
+	if [ "$1" != "$2" ] && [ -L "$1" ]; then
+		leave "$2"
+		return
+	fi
+	if [ -z "$recursive" ] && [ -d "$1" ] && ! [ -L "$1" ]; then
+		leave "$2"
+		return
+	fi
+	base=${1##*/}
+	path=${parent%/}/$base
+	if ! parent_dev || in_trash "$path" || ! batch "$pdev" "$base" "${parent%/}"; then
+		leave "$2"
+		return
+	fi
+	if [ "$dest" != "$gdest" ] || [ "$gcount" -ge 100 ]; then
+		flush
+		gdest=$dest gbatch=$b
+	fi
+	quote "$1"
+	group="$group $q" gcount=$((gcount + 1))
+}
+
+[ -z "${RUNE_TRASH_RM_PASSED-}" ] || pass "$@"
+
+opts=1 dashdash='' count=0 skip=0
 for a do
+	if [ -n "$opts" ]; then
+		skip=$((skip + 1))
+		case $a in
+		--) opts='' dashdash=1; continue ;;
+		--force) force=1; continue ;;
+		--recursive) recursive=1; continue ;;
+		--dir) dir=1; continue ;;
+		--verbose) verbose=1; continue ;;
+		-*[!dfRrv]*) pass "$@" ;;
+		-?*)
+			case $a in *f*) force=1 ;; esac
+			case $a in *[Rr]*) recursive=1 ;; esac
+			case $a in *d*) dir=1 ;; esac
+			case $a in *v*) verbose=1 ;; esac
+			continue
+			;;
+		esac
+		opts='' skip=$((skip - 1))
+	elif [ -z "$dashdash" ]; then
+		# GNU rm takes options after files; other rms take them as files.
+		case $a in -?*) pass "$@" ;; esac
+	fi
+	p=$a
+	while :; do case $p in ?*/) p=${p%/} ;; *) break ;; esac; done
+	# rm refuses these, each in its own words.
+	case $p in '' | / | . | .. | */. | */..) pass "$@" ;; esac
+	count=$((count + 1))
+done
+[ "$count" -gt 0 ] || pass "$@"
+shift "$skip"
+
+# Each process this starts can cost as much as rm itself, so it changes
+# directory to resolve paths rather than run a subshell, and comes back
+# home.
+cd -P . 2>/dev/null && home=$PWD
+
+first=1
+for a do
+	# bash copies the arguments at each function call, and the loop has its
+	# own.
 	if [ -n "$first" ]; then
 		first=''
 		set --
@@ -237,8 +286,7 @@ for a do
 	case $p in */*) d=${p%/*}; d=${d:-/} ;; *) d=. ;; esac
 	if [ "$d" != "$lastd" ]; then
 		# What it moved may be what the next files are in.
-		flush "$@"
-		set --
+		flush
 		lastd=$d parent='' pdev=''
 		if [ "$d" = . ]; then
 			parent=$home
@@ -247,39 +295,9 @@ for a do
 			back
 		fi
 	fi
-	if ! [ -e "$p" ] && ! [ -L "$p" ]; then
-		[ -n "$force" ] || leave "$a"
-		continue
-	fi
-	# Whether rm removes the link or what it names depends on the rm.
-	if [ "$p" != "$a" ] && [ -L "$p" ]; then
-		leave "$a"
-		continue
-	fi
-	if [ -z "$recursive" ] && [ -d "$p" ] && ! [ -L "$p" ]; then
-		leave "$a"
-		continue
-	fi
-	base=${p##*/}
-	if [ -n "$pdev" ] || [ -z "$parent" ]; then
-		:
-	elif [ -z "$tried" ]; then
-		init_trash "$parent"
-	elif [ -n "$trashes" ] && devices "$parent"; then
-		pdev=${out%% *}
-	fi
-	if [ -z "$pdev" ] || in_trash "${parent%/}/$base" || ! batch "$pdev" "$base" "${parent%/}"; then
-		leave "$a"
-		continue
-	fi
-	if [ "$dest" != "$gdest" ]; then
-		flush "$@"
-		set --
-		gdest=$dest gbatch=$b
-	fi
-	set -- "$@" "$p"
+	consider "$p" "$a"
 done
-flush "$@"
+flush
 
 if [ -n "$moved" ] && [ -t 2 ]; then
 	IFS=$nl
