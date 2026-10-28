@@ -73,6 +73,9 @@ Nor does it change what does not run `rm` from the `PATH`: `/bin/rm`, `sudo rm`,
 themselves. A shell that ran `rm` before you installed the package may remember the old
 one: run `hash -r` or open a new terminal.
 
+Other versions of this `rm` on the `PATH`, and wrappers that run `rm` again, pass the
+files on to the `rm` of the system rather than to each other.
+
 It does not run on Windows.
 
 ## Install

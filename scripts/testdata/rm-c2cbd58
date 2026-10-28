@@ -1,0 +1,262 @@
+#!/bin/sh
+# This rm moves what it removes to a trash in the temporary directory,
+# which the system clears in time, so that what an agent, a script or a
+# slip removes can be restored. What it cannot do the way rm would, it
+# leaves to the next rm on the PATH. See README.md of
+# https://github.com/unstablebuild/rune-plugin-rm.
+
+set -f
+# cd would look relative directories up in it instead of here.
+unset CDPATH
+
+# real_rm sets real to the next rm on the PATH: neither this file nor a
+# copy of it, such as in another Rune data directory, which would run this
+# again.
+real_rm() {
+	[ -z "${real-}" ] || return 0
+	real=/bin/rm
+	IFS=:
+	for d in $PATH; do
+		c=${d:-.}/rm
+		if [ -f "$c" ] && [ -x "$c" ] && ! [ "$c" -ef "$0" ] && ! cmp -s "$c" "$0"; then
+			real=$c
+			break
+		fi
+	done
+	unset IFS
+}
+
+force='' recursive='' dir='' verbose=''
+opts=1 dashdash='' count=0
+for a do
+	if [ -n "$opts" ]; then
+		case $a in
+		--) opts='' dashdash=1; continue ;;
+		--force) force=1; continue ;;
+		--recursive) recursive=1; continue ;;
+		--dir) dir=1; continue ;;
+		--verbose) verbose=1; continue ;;
+		-*[!dfRrv]*) real_rm; exec "$real" "$@" ;;
+		-?*)
+			case $a in *f*) force=1 ;; esac
+			case $a in *[Rr]*) recursive=1 ;; esac
+			case $a in *d*) dir=1 ;; esac
+			case $a in *v*) verbose=1 ;; esac
+			continue
+			;;
+		esac
+		opts=
+	elif [ -z "$dashdash" ]; then
+		# GNU rm takes options after files; other rms take them as files.
+		case $a in -?*) real_rm; exec "$real" "$@" ;; esac
+	fi
+	p=$a
+	while :; do case $p in ?*/) p=${p%/} ;; *) break ;; esac; done
+	# rm refuses these, each in its own words.
+	case $p in '' | / | . | .. | */. | */..) real_rm; exec "$real" "$@" ;; esac
+	count=$((count + 1))
+done
+[ "$count" -gt 0 ] || { real_rm; exec "$real" "$@"; }
+
+opts=1
+for a do
+	shift
+	if [ -n "$opts" ]; then
+		case $a in
+		--) opts=; continue ;;
+		-?*) continue ;;
+		esac
+		opts=
+	fi
+	set -- "$@" "$a"
+done
+
+nl='
+'
+status=0 moved='' statfmt='' trashes='' tried=''
+
+# Each process this starts can cost as much as rm itself, so it changes
+# directory to resolve paths rather than run a subshell, and comes back
+# to home.
+home=''
+cd -P . 2>/dev/null && cd -P -- "$PWD" 2>/dev/null && home=$PWD
+
+back() {
+	cd -P -- "$home" 2>/dev/null && return 0
+	printf 'rm: cannot return to %s\n' "$home" >&2
+	exit 1
+}
+
+# leave has the real rm remove $1.
+leave() {
+	real_rm
+	"$real" ${force:+-f} ${recursive:+-R} ${dir:+-d} ${verbose:+-v} -- "$1" || status=1
+}
+
+# devices sets out to a "device path" line per file, or fails.
+devices() {
+	if [ -z "$statfmt" ]; then
+		# Guess right on macOS and Linux to start one stat rather than two.
+		if [ -d /System/Library ]; then statfmt=bsd; else statfmt=gnu; fi
+		devices "$@" && return 0
+		if [ "$statfmt" = gnu ]; then statfmt=bsd; else statfmt=gnu; fi
+	fi
+	if [ "$statfmt" = gnu ]; then
+		out=$(stat -c '%d %n' -- "$@" 2>/dev/null)
+	else
+		out=$(stat -f '%d %N' -- "$@" 2>/dev/null)
+	fi
+}
+
+# init_trash sets trashes to the temporary directories the trash can be
+# in, as "device path" lines, and pdev to the device of directory $1.
+init_trash() {
+	tried=1
+	[ -n "$home" ] || return 1
+	user=${USER:-${LOGNAME-}}
+	case $user in '' | */*) user=$(id -u) || return 1 ;; esac
+	tmps=''
+	for t in "${TMPDIR-}" /var/tmp /tmp; do
+		[ -n "$t" ] && cd -P -- "$t" 2>/dev/null && tmps=$tmps${tmps:+$nl}$PWD
+	done
+	back
+	[ -n "$tmps" ] || return 1
+	IFS=$nl
+	# Split into the directories; globbing is off.
+	# shellcheck disable=SC2086
+	devices $tmps "$1" || out=''
+	unset IFS
+	case $out in *"$nl"*) ;; *) return 1 ;; esac
+	trashes=${out%"$nl"*}
+	pdev=${out##*"$nl"}
+	pdev=${pdev%% *}
+}
+
+# batch sets b to the directory in the trash on device $1 this rm moves
+# files to, and dest to the one in it for directory $3, which has no $2
+# yet. It fails when no temporary directory is on the device, since a
+# move to another device would copy.
+batch() {
+	case $1 in '' | *[!0-9]*) return 1 ;; esac
+	eval "b=\${batch_$1-} n=\${count_$1-0}"
+	if [ -z "$b" ]; then
+		tmp=''
+		IFS=$nl
+		for l in $trashes; do
+			if [ "${l%% *}" = "$1" ]; then
+				tmp=${l#* }
+				break
+			fi
+		done
+		unset IFS
+		[ -n "$tmp" ] || return 1
+		root=$tmp/rune-trash-$user
+		[ -d "$root" ] || mkdir -m 700 -- "$root" 2>/dev/null
+		# Other users can create it first in a shared /tmp. A shell without
+		# -O fails the test, which leaves the files to the real rm.
+		# shellcheck disable=SC3067
+		[ -d "$root" ] && ! [ -L "$root" ] && [ -O "$root" ] || return 1
+	else
+		root=${b%/*}
+	fi
+	# A directory of an earlier rm of the same process ID is skipped.
+	while [ -z "$b" ] || [ -e "$b$3/$2" ] || [ -L "$b$3/$2" ]; do
+		n=$((n + 1))
+		[ "$n" -le 1000 ] || return 1
+		b=$root/$$
+		[ "$n" -eq 1 ] || b=$b-$n
+		! [ -e "$b" ] || b=''
+	done
+	eval "batch_$1=\$b count_$1=\$n"
+	dest=$b$3
+}
+
+# in_trash reports whether $1 is in a trash, whose files rm deletes.
+in_trash() {
+	IFS=$nl
+	for l in $trashes; do
+		case $1/ in "${l#* }/rune-trash-$user"/*) unset IFS; return 0 ;; esac
+	done
+	unset IFS
+	return 1
+}
+
+# flush moves the files, all in one directory, to gdest.
+flush() {
+	[ "$#" -gt 0 ] || return 0
+	mkdir -p -- "$gdest" && mv -- "$@" "$gdest/" 2>/dev/null
+	for f do
+		if [ -e "$f" ] || [ -L "$f" ]; then
+			leave "$f"
+			continue
+		fi
+		[ -z "$verbose" ] || printf "moved '%s' to '%s'\n" "$f" "$gdest/${f##*/}"
+		case $nl$moved$nl in *"$nl$gbatch$nl"*) ;; *) moved=$moved${moved:+$nl}$gbatch ;; esac
+	done
+}
+
+# The files to move to gdest together are gathered in "$@", which the
+# loop no longer reads once it starts.
+lastd='' gdest='' gbatch='' first=1
+for a do
+	if [ -n "$first" ]; then
+		first=''
+		set --
+	fi
+	p=$a
+	while :; do case $p in ?*/) p=${p%/} ;; *) break ;; esac; done
+	case $p in */*) d=${p%/*}; d=${d:-/} ;; *) d=. ;; esac
+	if [ "$d" != "$lastd" ]; then
+		# What it moved may be what the next files are in.
+		flush "$@"
+		set --
+		lastd=$d parent='' pdev=''
+		if [ "$d" = . ]; then
+			parent=$home
+		elif [ -n "$home" ] && cd -P -- "$d" 2>/dev/null; then
+			parent=$PWD
+			back
+		fi
+	fi
+	if ! [ -e "$p" ] && ! [ -L "$p" ]; then
+		[ -n "$force" ] || leave "$a"
+		continue
+	fi
+	# Whether rm removes the link or what it names depends on the rm.
+	if [ "$p" != "$a" ] && [ -L "$p" ]; then
+		leave "$a"
+		continue
+	fi
+	if [ -z "$recursive" ] && [ -d "$p" ] && ! [ -L "$p" ]; then
+		leave "$a"
+		continue
+	fi
+	base=${p##*/}
+	if [ -n "$pdev" ] || [ -z "$parent" ]; then
+		:
+	elif [ -z "$tried" ]; then
+		init_trash "$parent"
+	elif [ -n "$trashes" ] && devices "$parent"; then
+		pdev=${out%% *}
+	fi
+	if [ -z "$pdev" ] || in_trash "${parent%/}/$base" || ! batch "$pdev" "$base" "${parent%/}"; then
+		leave "$a"
+		continue
+	fi
+	if [ "$dest" != "$gdest" ]; then
+		flush "$@"
+		set --
+		gdest=$dest gbatch=$b
+	fi
+	set -- "$@" "$p"
+done
+flush "$@"
+
+if [ -n "$moved" ] && [ -t 2 ]; then
+	IFS=$nl
+	for b in $moved; do
+		printf 'rm: moved files to %s instead of permanently removing them\n' "$b" >&2
+	done
+	unset IFS
+fi
+exit "$status"

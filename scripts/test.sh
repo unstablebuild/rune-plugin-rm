@@ -91,12 +91,27 @@ trashed() {
 }
 
 # run runs $3... in work with $2 on its stdin and PATH $1, and sets code,
-# out and err.
+# out and err. It fails the case when the command takes more than 30
+# seconds.
 run() {
-	path=$1 stdin=$2
+	path=$1
+	printf '%s' "$2" >"$T/in"
 	shift 2
-	(cd "$T/work" && printf '%s' "$stdin" |
-		env -i PATH="$path" TMPDIR="$T/tmp" LC_ALL=C "$@" >"$T/out" 2>"$T/err")
+	(
+		cd "$T/work" || exit
+		exec env -i PATH="$path" TMPDIR="$T/tmp" LC_ALL=C "$@" <"$T/in" >"$T/out" 2>"$T/err"
+	) &
+	pid=$! i=0
+	while kill -0 "$pid" 2>/dev/null; do
+		i=$((i + 1))
+		if [ "$i" -gt 150 ]; then
+			kill -9 "$pid"
+			fail "$* did not finish"
+			break
+		fi
+		sleep 0.2
+	done
+	wait "$pid"
 	code=$?
 	out=$(cat "$T/out") err=$(cat "$T/err")
 }
@@ -210,6 +225,33 @@ new_env
 create a
 mkdir "$T/other" && cp "$rm_sh" "$T/other/rm"
 run "$repo/bin:$T/other:$syspath" "y$nl" "$rm_sh" -i a
+expect "exit code ($err)" 0 "$code"
+expect 'left in work, which the real rm removed' '' "$(files "$T/work" '')"
+done_case
+
+start 'rm skips other versions of itself on the PATH'
+new_env
+create a b
+mkdir "$T/a" "$T/b"
+# The version that was published first.
+cp "$repo/scripts/testdata/rm-c2cbd58" "$T/a/rm"
+{ cat "$rm_sh" && echo '# another version'; } >"$T/b/rm"
+chmod 755 "$T/a/rm" "$T/b/rm"
+run "$T/b:$T/a:$syspath" "y$nl" "$T/b/rm" -i a
+expect "exit code ($err)" 0 "$code"
+expect 'left in work, which the real rm removed' b "$(files "$T/work" '')"
+run "$T/a:$T/b:$syspath" "n$nl" "$T/a/rm" -i b
+expect "exit code ($err)" 0 "$code"
+expect 'left in work, which the real rm asked about' b "$(files "$T/work" '')"
+done_case
+
+start 'rm passes files to a wrapper that runs the first rm on the PATH again'
+new_env
+create a
+mkdir "$T/wrapper"
+printf '#!/bin/sh\nexec rm "$@"\n' >"$T/wrapper/rm"
+chmod 755 "$T/wrapper/rm"
+run "$repo/bin:$T/wrapper:$syspath" "y$nl" "$rm_sh" -i a
 expect "exit code ($err)" 0 "$code"
 expect 'left in work, which the real rm removed' '' "$(files "$T/work" '')"
 done_case

@@ -2,29 +2,57 @@
 # This rm moves what it removes to a trash in the temporary directory,
 # which the system clears in time, so that what an agent, a script or a
 # slip removes can be restored. What it cannot do the way rm would, it
-# leaves to the next rm on the PATH. See README.md of
+# leaves to the rm of the system. See
 # https://github.com/unstablebuild/rune-plugin-rm.
 
 set -f
 # cd would look relative directories up in it instead of here.
 unset CDPATH
 
-# real_rm sets real to the next rm on the PATH: neither this file nor a
-# copy of it, such as in another Rune data directory, which would run this
-# again.
+# Every version of this rm holds this text, in its first comment, which
+# tells them from the rm of the system.
+marker='This rm moves what it removes to a trash'
+real=''
+
+# is_rm reports whether $1 is an rm that removes for good, not a version
+# of this one, which would run this again.
+is_rm() {
+	[ -f "$1" ] && [ -x "$1" ] && ! [ "$1" -ef "$0" ] && ! grep -q -F "$marker" "$1" 2>/dev/null
+}
+
+# real_rm sets real to the rm of the system: the next rm on the PATH. An
+# rm that another passed files to looks in the directories of the system
+# first, in case the one it was passed them as is a wrapper that runs the
+# first rm on the PATH again.
 real_rm() {
-	[ -z "${real-}" ] || return 0
-	real=/bin/rm
+	[ -z "$real" ] || return 0
+	if [ -n "${RUNE_TRASH_RM_PASSED-}" ]; then
+		for real in /bin/rm /usr/bin/rm /run/current-system/sw/bin/rm; do
+			! is_rm "$real" || return 0
+		done
+	fi
 	IFS=:
+	# Globbing is off, so the PATH only splits.
 	for d in $PATH; do
-		c=${d:-.}/rm
-		if [ -f "$c" ] && [ -x "$c" ] && ! [ "$c" -ef "$0" ] && ! cmp -s "$c" "$0"; then
-			real=$c
-			break
+		real=${d:-.}/rm
+		if is_rm "$real"; then
+			unset IFS
+			return 0
 		fi
 	done
 	unset IFS
+	real=/bin/rm
 }
+
+# pass has the rm of the system remove the files, as it would alone.
+pass() {
+	real_rm
+	RUNE_TRASH_RM_PASSED=1
+	export RUNE_TRASH_RM_PASSED
+	exec "$real" "$@"
+}
+
+[ -z "${RUNE_TRASH_RM_PASSED-}" ] || pass "$@"
 
 force='' recursive='' dir='' verbose=''
 opts=1 dashdash='' count=0
@@ -36,7 +64,7 @@ for a do
 		--recursive) recursive=1; continue ;;
 		--dir) dir=1; continue ;;
 		--verbose) verbose=1; continue ;;
-		-*[!dfRrv]*) real_rm; exec "$real" "$@" ;;
+		-*[!dfRrv]*) pass "$@" ;;
 		-?*)
 			case $a in *f*) force=1 ;; esac
 			case $a in *[Rr]*) recursive=1 ;; esac
@@ -48,15 +76,15 @@ for a do
 		opts=
 	elif [ -z "$dashdash" ]; then
 		# GNU rm takes options after files; other rms take them as files.
-		case $a in -?*) real_rm; exec "$real" "$@" ;; esac
+		case $a in -?*) pass "$@" ;; esac
 	fi
 	p=$a
 	while :; do case $p in ?*/) p=${p%/} ;; *) break ;; esac; done
 	# rm refuses these, each in its own words.
-	case $p in '' | / | . | .. | */. | */..) real_rm; exec "$real" "$@" ;; esac
+	case $p in '' | / | . | .. | */. | */..) pass "$@" ;; esac
 	count=$((count + 1))
 done
-[ "$count" -gt 0 ] || { real_rm; exec "$real" "$@"; }
+[ "$count" -gt 0 ] || pass "$@"
 
 opts=1
 for a do
@@ -87,10 +115,11 @@ back() {
 	exit 1
 }
 
-# leave has the real rm remove $1.
+# leave has the rm of the system remove $1.
 leave() {
 	real_rm
-	"$real" ${force:+-f} ${recursive:+-R} ${dir:+-d} ${verbose:+-v} -- "$1" || status=1
+	RUNE_TRASH_RM_PASSED=1 "$real" ${force:+-f} ${recursive:+-R} ${dir:+-d} ${verbose:+-v} -- "$1" ||
+		status=1
 }
 
 # devices sets out to a "device path" line per file, or fails.
