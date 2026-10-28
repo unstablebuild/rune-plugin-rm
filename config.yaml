@@ -1,0 +1,5 @@
+command:
+  aliases:
+    # Lists what rm moved to the trash, newest first, in a new terminal tab
+    # that opens in the trash to restore files from.
+    trash: terminalnewtab sh "$RUNE_DATADIR/lib/$RUNE_PKG_ID/libexec/trash"
