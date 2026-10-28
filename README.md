@@ -1,11 +1,10 @@
-# An rm for Rune that can be undone
+# An rm command that can be undone
 
-A package for [Rune](https://github.com/unstablebuild/rune) that replaces `rm` with one
-that moves what it removes to a trash in the temporary directory instead of deleting it.
-What an agent, a script or a slip removes can then be restored, and the system clears
-the temporary directory in time, so the trash does not build up.
+A package for [Rune](https://github.com/unstablebuild/rune) that shadows your system's
+`rm` with one that moves what you or your agent intended to remove, to a trash in the
+temporary directory instead of deleting it.
 
-```console
+```bash
 $ rm -rf build
 rm: moved files to /var/tmp/rune-trash-me/4242 instead of permanently removing them
 $ mv /var/tmp/rune-trash-me/4242/home/me/src/app/build build
