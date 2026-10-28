@@ -38,6 +38,15 @@ expect() {
 	fail "$1:${nl}  want: $(printf '%s' "$2" | sed '2,$s/^/        /')${nl}  got:  $(printf '%s' "$3" | sed '2,$s/^/        /')"
 }
 
+# start names a case that is not run through check.
+start() {
+	name=$1 before=$failed
+}
+
+done_case() {
+	[ "$failed" -ne "$before" ] || passed=$((passed + 1))
+}
+
 # new_env sets T to a new directory with work/, which rm runs in, and
 # tmp/, which holds the trash, by the physical paths the trash records.
 new_env() {
@@ -144,13 +153,12 @@ check() {
 	IFS=$nl
 	for shell in $shells; do
 		unset IFS
-		name="$shell/$case_name"
+		start "$shell/$case_name"
 		new_env
 		# shellcheck disable=SC2086
 		create $case_files
 		# shellcheck disable=SC2086
 		run_rm "$shell" "$stdin" $case_args
-		before=$failed
 		expect "exit code ($err)" "$want_code" "$code"
 		expect 'left in work' "$want_left" "$(files "$T/work" '')"
 		expect 'in the trash' "$want_trash" "$(trashed)"
@@ -162,7 +170,7 @@ check() {
 		got_err=0
 		[ -z "$err" ] || got_err=1
 		expect "stderr is written ($err); the note is only for terminals" "$want_err" "$got_err"
-		[ "$failed" -ne "$before" ] || passed=$((passed + 1))
+		done_case
 	done
 	unset IFS
 }
@@ -188,25 +196,23 @@ check a '-rf .' 'rm refuses .' likerm
 check '' -f 'no files with -f' likerm
 check '' '' 'no files' likerm
 
-name='rm deletes what is in the trash'
-before=$failed
+start 'rm deletes what is in the trash'
 new_env
 create a
 run_rm - '' a
 run_rm - '' -rf "$T"/tmp/rune-trash-*
 expect "exit code ($err)" 0 "$code"
 expect 'trash' '' "$(cd "$T/tmp" && ls)"
-[ "$failed" -ne "$before" ] || passed=$((passed + 1))
+done_case
 
-name='rm skips copies of itself on the PATH'
-before=$failed
+start 'rm skips copies of itself on the PATH'
 new_env
 create a
 mkdir "$T/other" && cp "$rm_sh" "$T/other/rm"
 run "$repo/bin:$T/other:$syspath" "y$nl" "$rm_sh" -i a
 expect "exit code ($err)" 0 "$code"
 expect 'left in work, which the real rm removed' '' "$(files "$T/work" '')"
-[ "$failed" -ne "$before" ] || passed=$((passed + 1))
+done_case
 
 # in_tty runs $@ in a terminal, writing what it shows to $T/tty. The
 # script of util-linux, busybox and BSD each take the command their way.
@@ -222,8 +228,7 @@ in_tty() {
 	fi >"$T/tty" 2>&1 </dev/null
 }
 
-name='rm tells terminals where it moved the files'
-before=$failed
+start 'rm tells terminals where it moved the files'
 if command -v script >/dev/null 2>&1; then
 	new_env
 	create a
@@ -233,21 +238,19 @@ if command -v script >/dev/null 2>&1; then
 	expect 'shown' "rm: moved files to $batch instead of permanently removing them" \
 		"$(tr -d '\r\b' <"$T/tty" | sed 's/^\^D//')"
 	expect 'in the trash' '1 a' "$(trashed)"
-	[ "$failed" -ne "$before" ] || passed=$((passed + 1))
+	done_case
 else
 	echo "SKIP $name: no script(1)"
 fi
 
-name='trash says when it is empty'
-before=$failed
+start 'trash says when it is empty'
 new_env
 run "$syspath" '' env SHELL=/bin/pwd sh "$trash_sh"
 expect "exit code ($err)" 0 "$code"
 expect 'output' "The trash is empty.$nl$T/work" "$out"
-[ "$failed" -ne "$before" ] || passed=$((passed + 1))
+done_case
 
-name='trash lists what each rm moved, newest first, and opens a shell in the trash'
-before=$failed
+start 'trash lists what each rm moved, newest first, and opens a shell in the trash'
 new_env
 create d/x d/y/z e/ a
 run_rm - '' -rf d e
@@ -268,7 +271,7 @@ expect 'the oldest' "$old  (2020-01-01 00:00)" "$(line 3)"
 expect 'what the oldest moved' "  $T/work/d/x$nl  $T/work/d/y/z$nl  $T/work/e/" \
 	"$(printf '%s\n' "$out" | sed -n 4,6p | sort)"
 expect 'shell in the trash' "${new%/*}" "$(printf '%s\n' "$out" | tail -n 1)"
-[ "$failed" -ne "$before" ] || passed=$((passed + 1))
+done_case
 
 IFS=$nl
 for T in $envs; do
