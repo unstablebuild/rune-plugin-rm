@@ -16,7 +16,9 @@ marker='This rm moves what it removes to a trash'
 nl='
 '
 sq="'"
-status=0 real='' statfmt='' tried='' trashes='' pdev='' parent='' home=''
+# A week.
+keep_for=604800
+status=0 real='' statfmt='' tried='' trashes='' pdev='' parent='' home='' now=''
 force='' recursive='' dir='' verbose=''
 lastd='' group='' gcount=0 gdest='' gbatch='' moved=''
 
@@ -175,10 +177,39 @@ root_for() {
 	[ "$root" != - ]
 }
 
+# prune deletes, in the background, what rm moved to trash root a week ago
+# or more, an hour at least after it last did.
+prune() {
+	[ "$now" -gt 0 ] || return 0
+	last=0
+	{ read -r last <"$root/.pruned"; } 2>/dev/null
+	case $last in '' | *[!0-9]*) last=0 ;; esac
+	[ $((now - last)) -ge 3600 ] || return 0
+	{ printf '%s\n' "$now" >"$root/.pruned"; } 2>/dev/null || return 0
+	old=''
+	set +f
+	for o in "$root"/[0-9]*-*; do
+		t=${o##*/}
+		t=${t%%-*}
+		case $t in '' | *[!0-9]*) continue ;; esac
+		if [ $((t + keep_for)) -le "$now" ]; then
+			quote "$o"
+			old="$old $q"
+		fi
+	done
+	set -f
+	[ -n "$old" ] || return 0
+	real_rm
+	(
+		eval "set -- $old"
+		RUNE_TRASH_RM_PASSED=1 exec "$real" -rf -- "$@"
+	) </dev/null >/dev/null 2>&1 &
+}
+
 # batch sets b to the directory in the trash for the files of device $1
 # that this rm moves files to, and dest to the one in it for directory $3,
-# which has no $2 yet. It is named after the process ID of rm, skipping
-# one of an earlier rm of the same.
+# which has no $2 yet. It is named after when rm ran and its process ID,
+# skipping one of an earlier rm of the same.
 batch() {
 	root_for "$1" || return 1
 	eval "b=\${batch_$1-} n=\${count_$1-0}"
@@ -188,11 +219,16 @@ batch() {
 			eval "root_$1=-"
 			return 1
 		fi
+		if [ -z "$now" ]; then
+			now=$(date +%s 2>/dev/null)
+			case $now in '' | *[!0-9]*) now=0 ;; esac
+		fi
+		prune
 	fi
 	while [ -z "$b" ] || [ -e "$b$3/$2" ] || [ -L "$b$3/$2" ]; do
 		n=$((n + 1))
 		[ "$n" -le 1000 ] || return 1
-		b=$root/$$
+		b=$root/$now-$$
 		[ "$n" -eq 1 ] || b=$b-$n
 		! [ -e "$b" ] || b=''
 	done

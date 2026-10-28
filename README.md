@@ -6,8 +6,8 @@ temporary directory instead of deleting it.
 
 ```bash
 $ rm -rf build
-rm: moved files to /var/tmp/rune-trash-me/4242 instead of permanently removing them
-$ mv /var/tmp/rune-trash-me/4242/home/me/src/app/build build
+rm: moved files to /var/tmp/rune-trash-me/1761660000-4242 instead of permanently removing them
+$ mv /var/tmp/rune-trash-me/1761660000-4242/home/me/src/app/build build
 ```
 
 ## What it installs
@@ -26,9 +26,9 @@ Installing this package:
 `rm` moves each file to `rune-trash-<user>` in the first of `$TMPDIR`, `/var/tmp` and
 `/tmp` that is on the same disk as the file, so that the move is a rename, which is as
 quick as deleting the file whatever its size. Each `rm` gets a directory there named
-after its process ID, which holds the files at their full paths: removing
-`/home/me/src/app/build` puts it at
-`/var/tmp/rune-trash-me/4242/home/me/src/app/build`.
+after when it ran and its process ID, which holds the files at their full paths:
+removing `/home/me/src/app/build` puts it at
+`/var/tmp/rune-trash-me/1761660000-4242/home/me/src/app/build`.
 
 On macOS, `$TMPDIR` is a directory of your own on the disk of your home. On Linux,
 `/tmp` is often in memory, so files of your home go to `/var/tmp`.
@@ -49,11 +49,12 @@ prints the trash of the files in `DIR`.
 The system clears the temporary directory on its own schedule, often of days or weeks
 without use, and some systems clear `/tmp` when they start. The schedule counts from
 when the files were last used, not from when they were removed, so a file you had not
-opened in a while can go soon after. Restore files as soon as you can.
+opened in a while can go soon after. `rm` itself deletes what it moved to the trash a
+week before or more. Restore files as soon as you can.
 
-Until the system clears them, the files still take up space on the disk. To free it,
-remove them from the trash: `rm` deletes what is already in it, so
-`rm -rf /var/tmp/rune-trash-me` empties that trash.
+Until then, the files still take up space on the disk. To free it, remove them from the
+trash: `rm` deletes what is already in it, so `rm -rf /var/tmp/rune-trash-me` empties
+that trash.
 
 ## What it still deletes
 

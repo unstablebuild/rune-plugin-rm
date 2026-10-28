@@ -307,6 +307,26 @@ else
 	echo "SKIP $name: no script(1)"
 fi
 
+start 'rm deletes what it moved a week ago or more, at most hourly'
+new_env
+create a b
+root=$T/tmp/rune-trash-$uid
+now=$(date +%s)
+mkdir -m 700 "$root" && mkdir -p "$root/1-1/x" "$root/$((now - 3600))-2/x"
+run_rm - '' a
+i=0
+while [ -e "$root/1-1" ] && [ "$i" -lt 50 ]; do
+	sleep 0.2
+	i=$((i + 1))
+done
+! [ -e "$root/1-1" ] || fail 'the batch of a week ago is left'
+[ -e "$root/$((now - 3600))-2" ] || fail 'the batch of an hour ago is gone'
+mkdir -p "$root/1-3/x"
+run_rm - '' b
+sleep 1
+[ -e "$root/1-3" ] || fail 'rm pruned again within the hour'
+done_case
+
 start 'trash-dir prints the trash rm moves the files of the directory to'
 new_env
 run "$syspath" '' sh "$trash_dir_sh" "$T/work"
