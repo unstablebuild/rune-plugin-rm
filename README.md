@@ -61,8 +61,8 @@ remove them from the trash: `rm` deletes what is already in it, so
 
 - what is on a disk where none of the temporary directories is, or is already in the
   trash, or could not be moved;
-- everything, when the trash is not a directory of yours, as when another user created
-  it first in a shared `/tmp`.
+- what would go to a trash that is not a directory of yours, as when another user
+  created it first in a shared `/tmp`, and `rune-trash-<uid>` is not yours either.
 
 It leaves to the `rm` of the system, which deletes as usual:
 

@@ -27,7 +27,7 @@ if command -v busybox >/dev/null 2>&1 && ! [ /bin/ash -ef "$(command -v busybox)
 	shells="$shells${nl}busybox sh"
 fi
 
-passed=0 failed=0 name='' envs=''
+passed=0 failed=0 name='' envs='' xenv=''
 
 fail() {
 	printf 'FAIL %s: %s\n' "$name" "$1"
@@ -81,27 +81,29 @@ files() {
 	) | sed "s|^\./|$2|" | sort
 }
 
-# trashed lists the files of work in the trash, prefixed by the number of
-# the directory of the rm they are in.
+# trashed lists the files of work in the trash of the uid, prefixed by the
+# number of the directory of the rm they are in.
 trashed() {
 	i=0
-	for b in "$T"/tmp/rune-trash-*/*; do
+	for b in "$T/tmp/rune-trash-$uid"/*; do
 		[ -d "$b" ] || continue
 		i=$((i + 1))
 		files "$b$T/work" "$i "
 	done
 }
 
-# run runs $3... in work with $2 on its stdin and PATH $1, and sets code,
-# out and err. It fails the case when the command takes more than 30
-# seconds.
+# run runs $3... in work with $2 on its stdin and PATH $1, and the
+# variables of xenv, and sets code, out and err. It fails the case when
+# the command takes more than 30 seconds.
 run() {
 	path=$1
 	printf '%s' "$2" >"$T/in"
 	shift 2
 	(
 		cd "$T/work" || exit
-		exec env -i PATH="$path" TMPDIR="$T/tmp" LC_ALL=C "$@" <"$T/in" >"$T/out" 2>"$T/err"
+		# xenv splits into the variables.
+		# shellcheck disable=SC2086
+		exec env -i PATH="$path" TMPDIR="$T/tmp" LC_ALL=C $xenv "$@" <"$T/in" >"$T/out" 2>"$T/err"
 	) &
 	pid=$! i=0
 	while kill -0 "$pid" 2>/dev/null; do
@@ -235,7 +237,7 @@ start 'rm deletes what is in the trash'
 new_env
 create a
 run_rm - '' a
-run_rm - '' -rf "$T"/tmp/rune-trash-*
+run_rm - '' -rf "$T/tmp/rune-trash-$uid"
 expect "exit code ($err)" 0 "$code"
 expect 'trash' '' "$(cd "$T/tmp" && ls)"
 done_case
@@ -295,7 +297,7 @@ if command -v script >/dev/null 2>&1; then
 	new_env
 	create a
 	(cd "$T/work" && in_tty env -i PATH="$repo/bin:$syspath" TMPDIR="$T/tmp" "$rm_sh" a)
-	batch=$(echo "$T"/tmp/rune-trash-*/*)
+	batch=$(echo "$T/tmp/rune-trash-$uid"/*)
 	# BSD script echoes the end of its stdin as ^D and backspaces.
 	expect 'shown' "rm: moved files to $batch instead of permanently removing them" \
 		"$(tr -d '\r\b' <"$T/tty" | sed 's/^\^D//')"
@@ -361,6 +363,21 @@ expect 'the rms listed' 10 "$(printf '%s\n' "$out" | grep -c '  (2020-')"
 expect 'the newest first' "$root/12-1  (2020-01-01 00:12)" "$(printf '%s\n' "$out" | sed -n 1p)"
 expect 'the rest' '…and what 2 more rms moved' "$(printf '%s\n' "$out" | grep 'more rms')"
 done_case
+
+# Root can test what it is to be another user.
+if [ "$uid" -eq 0 ]; then
+	start 'a trash another user made first, as USER may name them'
+	new_env
+	create a
+	mkdir "$T/tmp/rune-trash-someone" && chown 1000 "$T/tmp/rune-trash-someone"
+	xenv=USER=someone
+	run_rm - '' a
+	xenv=''
+	expect "exit code ($err)" 0 "$code"
+	expect 'in the trash of the uid' '1 a' "$(trashed)"
+	expect "in the other user's" '' "$(ls "$T/tmp/rune-trash-someone")"
+	done_case
+fi
 
 IFS=$nl
 for T in $envs; do
