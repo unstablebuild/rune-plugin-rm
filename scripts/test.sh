@@ -345,6 +345,23 @@ expect 'what the oldest moved' "  $T/work/d/x$nl  $T/work/d/y/z$nl  $T/work/e/" 
 expect 'shell in the trash' "$root" "$(printf '%s\n' "$out" | tail -n 1)"
 done_case
 
+start 'trash lists the files of the 10 newest rms, and counts the rest'
+new_env
+root=$T/tmp/rune-trash-$uid
+mkdir -m 700 "$root"
+i=1
+while [ "$i" -le 12 ]; do
+	mkdir -p "$root/$i-1/x" && : >"$root/$i-1/x/f"
+	touch -t "2020010100$(printf %02d "$i")" "$root/$i-1"
+	i=$((i + 1))
+done
+run "$syspath" '' env SHELL=/bin/pwd sh "$trash_sh" "$root"
+expect "exit code ($err)" 0 "$code"
+expect 'the rms listed' 10 "$(printf '%s\n' "$out" | grep -c '  (2020-')"
+expect 'the newest first' "$root/12-1  (2020-01-01 00:12)" "$(printf '%s\n' "$out" | sed -n 1p)"
+expect 'the rest' '…and what 2 more rms moved' "$(printf '%s\n' "$out" | grep 'more rms')"
+done_case
+
 IFS=$nl
 for T in $envs; do
 	[ -n "$T" ] && /bin/rm -rf "$T"

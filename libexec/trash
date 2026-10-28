@@ -7,6 +7,8 @@ unset CDPATH
 
 nl='
 '
+# The batches it lists files of.
+shown=10
 
 if [ -z "${1-}" ]; then
 	echo 'usage: trash DIR' >&2
@@ -19,13 +21,15 @@ fi
 
 # Each directory holds what one rm moved, at its full path. rm names them,
 # with no newline. ls sorts them by time.
-newest=''
+i=0 newest=''
 IFS=$nl
 # shellcheck disable=SC2045
 for b in $(ls -t); do
 	if ! [ -d "$b" ] || [ -L "$b" ]; then
 		continue
 	fi
+	i=$((i + 1))
+	[ "$i" -le "$shown" ] || continue
 	[ -n "$newest" ] || newest=$PWD/$b
 	# BSD date takes a name that is a number for seconds.
 	when=$(date -r "$PWD/$b" '+%Y-%m-%d %H:%M' 2>/dev/null) || when=''
@@ -49,6 +53,7 @@ if [ -z "$newest" ]; then
 	printf 'The trash is empty: %s\n' "$PWD"
 	exec "${SHELL:-/bin/sh}"
 fi
+[ "$i" -le "$shown" ] || printf '…and what %s more rms moved\n' "$((i - shown))"
 
 cat <<EOF
 
