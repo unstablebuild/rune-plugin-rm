@@ -39,6 +39,9 @@ On macOS, `$TMPDIR` is a directory of your own on the disk of your home. On Linu
 your home when it is on a disk of its own, as on many btrfs and network setups. Files
 on other disks, such as a USB drive or `/dev/shm`, have no trash: `rm` deletes them.
 
+`rm` finds the device of each file with `stat`, in its GNU or BSD form, and runs under
+the `sh` of macOS, of Debian (dash), of Fedora (bash) and of Alpine (BusyBox).
+
 When its standard error is a terminal, `rm` tells you which directory it moved the files
 to. Otherwise it prints nothing, as `rm` does, so scripts and agents that read its output
 see no difference. With `-v`, it prints each file it moves.
@@ -116,7 +119,7 @@ The `trash` command stays in your config until you remove `command.aliases.trash
 
 ```
 make test         # run the tests under each POSIX shell found here
-make test-docker  # run them on Debian and Alpine, as root and as a user
+make test-docker  # run them on Debian, Fedora and Alpine, as root and as a user
 make lint         # run shellcheck
 ```
 
