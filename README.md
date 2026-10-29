@@ -1,8 +1,8 @@
 # An rm command that can be undone
 
 A package for [Rune](https://github.com/unstablebuild/rune) that shadows your system's
-`rm` with one that moves what you or your agent intended to remove, to a trash in the
-temporary directory or your home's cache instead of deleting it.
+`rm` and `rmdir` with ones that move what you or your agent intended to remove, to a
+trash in the temporary directory or your home's cache instead of deleting it.
 
 ```bash
 $ rm -rf build
@@ -17,6 +17,7 @@ Installing this package:
 - Adds `rm` to your Rune data directory, `$RUNE_DATADIR/bin`, which Rune puts first on
   the `PATH` of its terminals and of the commands it runs, such as Rune Agent's. Other
   programs and terminals keep the `rm` of your system.
+- Adds `rmdir` there too, which has that `rm` move the directories it removes.
 - Adds a `trash` command. Run `:trash` from the command prompt to open a terminal tab
   that lists what each `rm` moved to the trash of the workspace's files, newest first,
   and opens a shell there.
@@ -48,6 +49,12 @@ see no difference. With `-v`, it prints each file it moves.
 
 `rm` takes about 10 ms more than the `rm` of the system, which it is a shell script
 around.
+
+`rmdir` removes each directory that is empty with `rm -d`, which moves it to the trash
+like any other file. With `-p`, it then has the `rmdir` of the system remove the parents
+left empty, which the trash already holds the way they were: moving the topmost one
+back restores them all. Directories that are not empty, files and missing names go to
+the `rmdir` of the system, which refuses them in its own words.
 
 ## Restore files
 
@@ -86,16 +93,20 @@ It leaves to the `rm` of the system, which deletes as usual:
 
 - options other than `-f`, `-r`, `-R`, `-d` and `-v` and their long forms, such as `-i`
   and `--one-file-system`, and options after file names;
-- directories without `-r`, symlinks named with a trailing slash, and `/`, `.` and
-  `..`, which `rm` refuses in its own words.
+- directories without `-r`, except empty ones with `-d`, symlinks named with a trailing
+  slash, and `/`, `.` and `..`, which `rm` refuses in its own words.
+
+`rmdir` likewise leaves to the `rmdir` of the system options other than `-p` and `-v`
+and their long forms, such as `--ignore-fail-on-non-empty`, and options after directory
+names. `rmdir` removes only empty directories, so what these delete holds no files.
 
 Nor does it change what does not run `rm` from the `PATH`: `/bin/rm`, `sudo rm`, whose
 `PATH` is its own, `find -delete`, `git clean`, and programs that delete files
 themselves. A shell that ran `rm` before you installed the package may remember the old
 one: run `hash -r` or open a new terminal.
 
-Other versions of this `rm` on the `PATH`, and wrappers that run `rm` again, pass the
-files on to the `rm` of the system rather than to each other.
+Other versions of this `rm` or `rmdir` on the `PATH`, and wrappers that run them again,
+pass the files on to the `rm` or `rmdir` of the system rather than to each other.
 
 It does not run on Windows.
 

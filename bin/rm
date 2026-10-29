@@ -59,8 +59,14 @@ pass() {
 	exec "$real" "$@"
 }
 
-# leave has the rm of the system remove $1.
+# leave has the rm of the system remove $1. The rmdir of this package
+# names the rmdir of the system in RUNE_TRASH_RMDIR for the directories it
+# passes, which leave has it remove: not every rm takes -d.
 leave() {
+	if [ -n "${RUNE_TRASH_RMDIR-}" ] && [ -z "$recursive" ] && [ -d "$1" ] && ! [ -L "$1" ]; then
+		RUNE_TRASH_RMDIR_PASSED=1 "$RUNE_TRASH_RMDIR" ${verbose:+-v} -- "$1" || status=1
+		return
+	fi
 	real_rm
 	RUNE_TRASH_RM_PASSED=1 "$real" ${force:+-f} ${recursive:+-R} ${dir:+-d} ${verbose:+-v} -- "$1" ||
 		status=1
@@ -176,6 +182,20 @@ usable() {
 		# shellcheck disable=SC3067
 		[ -d "$1" ] && ! [ -L "$1" ] && [ -O "$1" ]
 	fi
+}
+
+# empty reports whether directory $1 holds nothing. One that cannot be
+# read is not, since the glob cannot tell.
+empty() {
+	[ -r "$1" ] && [ -x "$1" ] || return 1
+	set +f
+	for ent in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+		if [ -e "$ent" ] || [ -L "$ent" ]; then
+			set -f
+			return 1
+		fi
+	done
+	set -f
 }
 
 # root_for sets root to the trash for the files of device $1 and rbase to
@@ -317,7 +337,9 @@ consider() {
 		leave "$2"
 		return
 	fi
-	if [ -z "$recursive" ] && [ -d "$1" ] && ! [ -L "$1" ]; then
+	# Without -r, rm removes a directory only with -d, and only when it is
+	# empty.
+	if [ -z "$recursive" ] && [ -d "$1" ] && ! [ -L "$1" ] && { [ -z "$dir" ] || ! empty "$1"; }; then
 		leave "$2"
 		return
 	fi

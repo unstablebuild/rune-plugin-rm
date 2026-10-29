@@ -1,0 +1,182 @@
+#!/bin/sh
+# shellcheck disable=SC2119 # flush gathers its arguments itself.
+# This rmdir moves what it removes to a trash, through the rm next to it,
+# so that what an agent, a script or a slip removes can be restored. What
+# it cannot do the way rmdir would, it leaves to the rmdir of the system.
+# See https://github.com/unstablebuild/rune-plugin-rm.
+
+set -f
+unset CDPATH
+
+# Every version of this rmdir holds this text, in its first comment, which
+# tells them from the rmdir of the system.
+marker='This rmdir moves what it removes to a trash'
+rm_marker='This rm moves what it removes to a trash'
+nl='
+'
+sq="'"
+status=0 real='' parents='' verbose='' group='' gcount=0 gnames=''
+case $0 in */*) rm=${0%/*}/rm ;; *) rm=./rm ;; esac
+
+# is_rmdir reports whether $1 is an rmdir that removes for good, not a
+# version of this one, which would run this again.
+is_rmdir() {
+	[ -f "$1" ] && [ -x "$1" ] && ! [ "$1" -ef "$0" ] && ! grep -q -F "$marker" "$1" 2>/dev/null
+}
+
+# real_rmdir sets real to the rmdir of the system: the next rmdir on the
+# PATH. An rmdir that another passed directories to looks in the
+# directories of the system first, in case the one it was passed them as
+# is a wrapper that runs the first rmdir on the PATH again.
+real_rmdir() {
+	[ -z "$real" ] || return 0
+	if [ -n "${RUNE_TRASH_RMDIR_PASSED-}" ]; then
+		for real in /bin/rmdir /usr/bin/rmdir /run/current-system/sw/bin/rmdir; do
+			! is_rmdir "$real" || return 0
+		done
+	fi
+	IFS=:
+	# Globbing is off, so the PATH only splits.
+	for d in $PATH; do
+		real=${d:-.}/rmdir
+		if is_rmdir "$real"; then
+			unset IFS
+			return 0
+		fi
+	done
+	unset IFS
+	real=/bin/rmdir
+}
+
+# pass has the rmdir of the system remove the directories, as it would
+# alone.
+pass() {
+	real_rmdir
+	RUNE_TRASH_RMDIR_PASSED=1
+	export RUNE_TRASH_RMDIR_PASSED
+	exec "$real" "$@"
+}
+
+# leave has the rmdir of the system remove $1.
+leave() {
+	real_rmdir
+	RUNE_TRASH_RMDIR_PASSED=1 "$real" ${parents:+-p} ${verbose:+-v} -- "$1" || status=1
+}
+
+# quote sets q to $1 quoted for eval.
+quote() {
+	q='' s=$1
+	while :; do
+		case $s in
+		*"$sq"*) q=$q${s%%"$sq"*}$sq\\$sq$sq s=${s#*"$sq"} ;;
+		*)
+			q=$sq$q$s$sq
+			return
+			;;
+		esac
+	done
+}
+
+# empty reports whether $1 is a directory, not a symlink to one, that
+# holds nothing. One that cannot be read is not, since the glob cannot
+# tell.
+empty() {
+	[ -d "$1" ] && ! [ -L "$1" ] && [ -r "$1" ] && [ -x "$1" ] || return 1
+	set +f
+	for ent in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+		if [ -e "$ent" ] || [ -L "$ent" ]; then
+			set -f
+			return 1
+		fi
+	done
+	set -f
+}
+
+# flush has rm move the directories gathered to the trash. rm -d removes
+# them only while they are empty, even when it cannot move them. They are
+# moved some at a time: the shell copies all of them to gather one.
+# shellcheck disable=SC2120
+flush() {
+	[ "$gcount" -gt 0 ] || return 0
+	eval "set -- $group"
+	group='' gcount=0 gnames=''
+	real_rmdir
+	RUNE_TRASH_RMDIR=$real "$rm" -d ${verbose:+-v} -- "$@" || status=1
+}
+
+[ -z "${RUNE_TRASH_RMDIR_PASSED-}" ] || pass "$@"
+
+opts=1 dashdash='' count=0 skip=0
+for a do
+	if [ -n "$opts" ]; then
+		skip=$((skip + 1))
+		case $a in
+		--) opts='' dashdash=1; continue ;;
+		--parents) parents=1; continue ;;
+		--verbose) verbose=1; continue ;;
+		-*[!pv]*) pass "$@" ;;
+		-?*)
+			case $a in *p*) parents=1 ;; esac
+			case $a in *v*) verbose=1 ;; esac
+			continue
+			;;
+		esac
+		opts='' skip=$((skip - 1))
+	elif [ -z "$dashdash" ]; then
+		# GNU rmdir takes options after directories; other rmdirs take them
+		# as directories.
+		case $a in -?*) pass "$@" ;; esac
+	fi
+	count=$((count + 1))
+done
+[ "$count" -gt 0 ] || pass "$@"
+# Without the rm of this package, nothing would move the directories.
+{ [ -x "$rm" ] && grep -q -F "$rm_marker" "$rm" 2>/dev/null; } || pass "$@"
+shift "$skip"
+
+first=1
+for a do
+	# bash copies the arguments at each function call, and the loop has its
+	# own.
+	if [ -n "$first" ]; then
+		first=''
+		set --
+	fi
+	p=$a
+	while :; do case $p in ?*/) p=${p%/} ;; *) break ;; esac; done
+	# rmdir refuses these, each in its own words.
+	case $p in / | . | .. | */. | */..)
+		flush
+		leave "$a"
+		continue
+		;;
+	esac
+	# A directory named twice is gone when rmdir comes to it again.
+	case $nl$gnames in *"$nl${p##*/}$nl"*) flush ;; esac
+	if ! empty "$p"; then
+		# It may hold only the directories before it.
+		if [ "$gcount" -eq 0 ] || ! { flush && empty "$p"; }; then
+			leave "$a"
+			continue
+		fi
+	fi
+	if [ -n "$parents" ]; then
+		# rmdir -p goes on to the parents that are left empty, in ways that
+		# differ between rmdirs. An empty directory put back where this one
+		# was lets the rmdir of the system remove it and them as it would.
+		real_rmdir
+		if RUNE_TRASH_RMDIR=$real "$rm" -d -- "$p"; then
+			if mkdir -- "$p" 2>/dev/null; then
+				RUNE_TRASH_RMDIR_PASSED=1 "$real" -p ${verbose:+-v} -- "$a" || status=1
+			fi
+		else
+			status=1
+		fi
+		continue
+	fi
+	quote "$a"
+	group="$group $q" gcount=$((gcount + 1)) gnames=$gnames${p##*/}$nl
+	[ "$gcount" -lt 100 ] || flush
+done
+flush
+exit "$status"

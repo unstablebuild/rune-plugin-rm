@@ -1,8 +1,9 @@
 #!/bin/sh
-# Tests bin/rm and libexec. Cases that rm leaves to the rm of the system
-# are checked against it, whichever rm it is, and the cases of rm run under
-# each POSIX shell found here. Those of a home on another disk than the
-# temporary directories run where /dev/shm is one, as in containers.
+# Tests bin and libexec. Cases that rm or rmdir leave to the rm or rmdir of
+# the system are checked against it, whichever it is, and the cases of rm
+# and rmdir run under each POSIX shell found here. Those of a home on
+# another disk than the temporary directories run where /dev/shm is one, as
+# in containers.
 set -u
 unset CDPATH
 export LC_ALL=C
@@ -13,9 +14,12 @@ trash_sh=$repo/libexec/trash
 trash_dir_sh=$repo/libexec/trash-dir
 syspath=/usr/bin:/bin
 sysrm=$(PATH=$syspath command -v rm) || exit 1
+sysrmdir=$(PATH=$syspath command -v rmdir) || exit 1
 uid=$(id -u)
 nl='
 '
+# prog is the program of bin that check and run_bin run.
+prog='rm'
 
 # "-" runs rm by its #! line.
 shells=-
@@ -122,21 +126,21 @@ run() {
 	out=$(cat "$T/out") err=$(cat "$T/err")
 }
 
-# run_rm runs bin/rm with $3... through shell $1 with $2 on its stdin.
-run_rm() {
+# run_bin runs bin/$prog with $3... through shell $1 with $2 on its stdin.
+run_bin() {
 	shell=$1 stdin=$2
 	shift 2
 	if [ "$shell" = - ]; then
-		run "$repo/bin:$syspath" "$stdin" "$rm_sh" "$@"
+		run "$repo/bin:$syspath" "$stdin" "$repo/bin/$prog" "$@"
 	else
 		# Word splitting runs "busybox sh".
 		# shellcheck disable=SC2086
-		run "$repo/bin:$syspath" "$stdin" $shell "$rm_sh" "$@"
+		run "$repo/bin:$syspath" "$stdin" $shell "$repo/bin/$prog" "$@"
 	fi
 }
 
-# check runs the case named $1, creating files $2 and running rm with
-# args $3, under each shell. Lists are separated by spaces, and the
+# check runs the case named $3, creating files $1 and running $prog with
+# args $2, under each shell. Lists are separated by spaces, and the
 # options after them are:
 #
 #   code=N      the exit code, 0 by default
@@ -145,7 +149,7 @@ run_rm() {
 #   stdout=S    what stdout contains; it is empty by default
 #   stderr      stderr is not empty; it is empty by default
 #   stdin=S     a line on stdin
-#   likerm      the rm of the system removes the files, as it would alone
+#   likerm      the $prog of the system removes the files, as it would alone
 check() {
 	case_files=$1 case_args=$2 case_name=$3
 	shift 3
@@ -166,20 +170,22 @@ check() {
 		new_env
 		# shellcheck disable=SC2086
 		create $case_files
+		sys=$sysrm
+		[ "$prog" = rm ] || sys=$sysrmdir
 		# shellcheck disable=SC2086
-		run "$syspath" "$stdin" "$sysrm" $case_args
+		run "$syspath" "$stdin" "$sys" $case_args
 		want_code=$code want_left=$(files "$T/work" '') want_err=0
 		[ -z "$err" ] || want_err=1
 	fi
 	IFS=$nl
 	for shell in $shells; do
 		unset IFS
-		start "$shell/$case_name"
+		start "$shell/$prog $case_name"
 		new_env
 		# shellcheck disable=SC2086
 		create $case_files
 		# shellcheck disable=SC2086
-		run_rm "$shell" "$stdin" $case_args
+		run_bin "$shell" "$stdin" $case_args
 		expect "exit code ($err)" "$want_code" "$code"
 		expect 'left in work' "$want_left" "$(files "$T/work" '')"
 		expect 'in the trash' "$want_trash" "$(trashed)"
@@ -213,12 +219,102 @@ check a 'nope a' 'a missing file' code=1 trash='1 a' stderr
 check 'a b' 'a b ./a' 'a file named twice' trash='1 a|1 b' likerm
 check 'a b' '-f a b a' 'a file named twice with -f' trash='1 a|1 b' likerm
 check d/x d 'a directory without -r' likerm
-check e/ '-d e' 'an empty directory with -d' likerm
+check e/ '-d e' 'an empty directory with -d' trash='1 e/'
+check d/x '-d d' 'a directory that is not empty with -d' likerm
 check a '-i a' 'options it does not handle' stdin=y likerm
 check a 'a -f' 'options after files' likerm
-check a '-rf .' 'rm refuses .' likerm
+check a '-rf .' 'refuses .' likerm
 check '' -f 'no files with -f' likerm
 check '' '' 'no files' likerm
+
+prog='rmdir'
+check e/ e 'an empty directory' trash='1 e/'
+check 'e/ f/ g/' 'e f g' 'several' trash='1 e/|1 f/|1 g/'
+check e/ e/ 'a trailing slash' trash='1 e/'
+check -e/ '-- -e' 'a name like an option after --' trash='1 -e/'
+check "it's/" "it's" 'a name with a quote' trash="1 it's/"
+check e/ '-v e' verbose trash='1 e/' "stdout=moved 'e' to '"
+check d/e/ '--parents d/e' 'the parents' trash='1 d/e/'
+check 'd/e/ d/x' '-p d/e' 'the parents up to one that is not empty' left=d/x trash='1 d/e/' likerm
+check d/x d 'a directory that is not empty' likerm
+check d/x '-p d' 'a directory that is not empty with -p' likerm
+check a a 'a file' likerm
+check 'e/ l->e' l 'a symlink to a directory' likerm
+check 'e/ l->e' l/ 'a symlink to a directory with a trailing slash' likerm
+check '' nope 'a missing directory' likerm
+check e/ 'e e' 'a directory named twice' trash='1 e/' likerm
+check '' . 'refuses .' likerm
+check e/ '--ignore-fail-on-non-empty e' 'options it does not handle' likerm
+check e/ 'e -p' 'options after directories' likerm
+check '' '' 'no directories' likerm
+
+start 'rmdir a directory, then the one it was in'
+new_env
+create d/e/
+run_bin - '' d/e d
+expect "exit code ($err)" 0 "$code"
+expect 'left' '' "$(files "$T/work" '')"
+expect 'in the trash' "d/${nl}d/e/" "$(trashed | sed 's/^[0-9]* //' | sort)"
+done_case
+
+start 'rmdir -pv shows what the rmdir of the system shows'
+new_env
+create d/e/
+run "$syspath" '' "$sysrmdir" -pv d/e
+want=$out
+new_env
+create d/e/
+run_bin - '' -pv d/e
+expect "exit code ($err)" 0 "$code"
+expect stdout "$want" "$out"
+expect 'in the trash' '1 d/e/' "$(trashed)"
+done_case
+
+start 'many directories, which rmdir moves some at a time'
+new_env
+i=0
+while [ "$i" -lt 3000 ]; do
+	mkdir "$T/work/e$i"
+	i=$((i + 1))
+done
+t0=$(date +%s)
+run_bin - '' "$T"/work/e*
+t1=$(date +%s)
+expect "exit code ($err)" 0 "$code"
+expect 'left' '' "$(ls "$T/work")"
+expect 'in the trash' 3000 "$(trashed | wc -l | tr -d ' ')"
+echo "INFO $name: $((t1 - t0))s"
+done_case
+
+start 'rmdir leaves directories to the rmdir of the system without the rm of the package'
+new_env
+create e/
+mkdir "$T/bin" && cp "$repo/bin/rmdir" "$T/bin/rmdir"
+run "$T/bin:$syspath" '' "$T/bin/rmdir" e
+expect "exit code ($err)" 0 "$code"
+expect 'left' '' "$(files "$T/work" '')"
+expect 'in the trash' '' "$(trashed)"
+done_case
+
+start 'rmdir skips copies of itself on the PATH'
+new_env
+create e/
+mkdir "$T/other" && cp "$repo/bin/rmdir" "$T/other/rmdir"
+run "$repo/bin:$T/other:$syspath" '' "$repo/bin/rmdir" e -p
+expect 'left in work, which the real rmdir removed' '' "$(files "$T/work" '')"
+expect 'in the trash' '' "$(trashed)"
+done_case
+
+start 'rmdir passes directories to a wrapper that runs the first rmdir on the PATH again'
+new_env
+create e/
+mkdir "$T/wrapper"
+printf '#!/bin/sh\nexec rmdir "$@"\n' >"$T/wrapper/rmdir"
+chmod 755 "$T/wrapper/rmdir"
+run "$repo/bin:$T/wrapper:$syspath" '' "$repo/bin/rmdir" e -p
+expect 'left in work, which the real rmdir removed' '' "$(files "$T/work" '')"
+done_case
+prog='rm'
 
 start 'many files, which rm moves some at a time'
 new_env
@@ -229,7 +325,7 @@ while [ "$i" -lt 3000 ]; do
 	i=$((i + 1))
 done
 t0=$(date +%s)
-run_rm - '' -f "$T"/work/d/*
+run_bin - '' -f "$T"/work/d/*
 t1=$(date +%s)
 expect "exit code ($err)" 0 "$code"
 expect 'left' '' "$(ls "$T/work/d")"
@@ -240,8 +336,8 @@ done_case
 start 'rm deletes what is in the trash'
 new_env
 create a
-run_rm - '' a
-run_rm - '' -rf "$T/tmp/rune-trash-$uid"
+run_bin - '' a
+run_bin - '' -rf "$T/tmp/rune-trash-$uid"
 expect "exit code ($err)" 0 "$code"
 expect 'trash' '' "$(cd "$T/tmp" && ls)"
 done_case
@@ -317,7 +413,7 @@ create a b
 root=$T/tmp/rune-trash-$uid
 now=$(date +%s)
 mkdir -m 700 "$root" && mkdir -p "$root/1-1/x" "$root/$((now - 3600))-2/x"
-run_rm - '' a
+run_bin - '' a
 i=0
 while [ -e "$root/1-1" ] && [ "$i" -lt 50 ]; do
 	sleep 0.2
@@ -326,7 +422,7 @@ done
 ! [ -e "$root/1-1" ] || fail 'the batch of a week ago is left'
 [ -e "$root/$((now - 3600))-2" ] || fail 'the batch of an hour ago is gone'
 mkdir -p "$root/1-3/x"
-run_rm - '' b
+run_bin - '' b
 sleep 1
 [ -e "$root/1-3" ] || fail 'rm pruned again within the hour'
 done_case
@@ -350,8 +446,8 @@ done_case
 start 'trash lists what each rm moved, newest first, and opens a shell in the trash'
 new_env
 create d/x d/y/z e/ a
-run_rm - '' -rf d e
-run_rm - '' a
+run_bin - '' -rf d e
+run_bin - '' a
 root=$T/tmp/rune-trash-$uid
 set -- "$root"/*
 expect 'directories of the rms' 2 "$#"
@@ -399,7 +495,7 @@ if [ "$uid" -eq 0 ]; then
 	create a
 	mkdir "$T/tmp/rune-trash-someone" && chown 1000 "$T/tmp/rune-trash-someone"
 	xenv=USER=someone
-	run_rm - '' a
+	run_bin - '' a
 	xenv=''
 	expect "exit code ($err)" 0 "$code"
 	expect 'in the trash of the uid' '1 a' "$(trashed)"
@@ -431,7 +527,7 @@ else
 	start 'the files of a disk without a temporary directory go to the cache of the home'
 	new_home
 	create a d/x
-	run_rm - '' -r a d
+	run_bin - '' -r a d
 	expect "exit code ($err)" 0 "$code"
 	expect 'in the trash' "1 a${nl}1 d/x" "$(ctrash)"
 	expect 'in the temporary directory' '' "$(ls "$host_tmp")"
@@ -444,7 +540,7 @@ else
 	mkdir "$T/cache"
 	xenv="$xenv XDG_CACHE_HOME=$T/cache"
 	create a
-	run_rm - '' a
+	run_bin - '' a
 	expect "exit code ($err)" 0 "$code"
 	expect 'in the trash' '1 a' "$(ctrash "$T/cache")"
 	done_case
@@ -455,7 +551,7 @@ else
 	: >"$T/home/.profile"
 	: >"$T/home/src/app/main.go"
 	: >"$T/home/.cache/pip/x"
-	run_rm - '' -rf "$T/home"
+	run_bin - '' -rf "$T/home"
 	expect 'exit code' 1 "$code"
 	expect 'message' "rm: cannot remove '$T/home': it holds the trash, $T/home/.cache/rune-trash" "$err"
 	expect 'left in the home' .cache "$(ls -A "$T/home")"
@@ -467,8 +563,8 @@ else
 	start 'removing the cache removes the trash'
 	new_home
 	create a
-	run_rm - '' a
-	run_rm - '' -rf "$T/home/.cache"
+	run_bin - '' a
+	run_bin - '' -rf "$T/home/.cache"
 	expect "exit code ($err)" 0 "$code"
 	expect 'left in the home' '' "$(ls -A "$T/home")"
 	done_case
@@ -477,7 +573,7 @@ else
 	new_env /dev/shm
 	create a
 	xenv="TMPDIR=$host_tmp"
-	run_rm - '' a
+	run_bin - '' a
 	expect "exit code ($err)" 0 "$code"
 	expect 'left' '' "$(files "$T/work" '')"
 	run "$syspath" '' sh "$trash_dir_sh" "$T/work"
@@ -487,12 +583,24 @@ else
 	xenv=''
 	done_case
 
+	start 'rmdir on a disk with no trash removes only the empty directories'
+	new_env /dev/shm
+	create e/ d/x
+	xenv="TMPDIR=$host_tmp"
+	prog='rmdir'
+	run_bin - '' e d
+	prog='rm'
+	xenv=''
+	expect 'exit code' 1 "$code"
+	expect 'left' d/x "$(files "$T/work" '')"
+	done_case
+
 	if [ "$uid" -eq 0 ]; then
 		start "root with another user's home deletes for good"
 		new_home
 		chown 1000 "$T/home"
 		create a
-		run_rm - '' a
+		run_bin - '' a
 		expect "exit code ($err)" 0 "$code"
 		expect 'left' '' "$(files "$T/work" '')"
 		expect 'left in the home' '' "$(ls -A "$T/home")"
